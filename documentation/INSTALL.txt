@@ -1,0 +1,84 @@
+WORDPRESS SENTINEL 0.21.0-rc1 — INSTALLATION AND ROUTINE USE
+
+To scan without installing anything on the host, see REMOTE.txt. The steps below
+install Sentinel on the host, which you need for quarantine and restore.
+
+Paths below are examples. "SITE" is the folder holding your site's public_html.
+
+1. Upload and requirements
+
+Upload the package files directly into SITE/compat/wp-sentinel while no Sentinel
+operation is running, keeping the documentation folder. Do not upload the tests
+folder. Preserve the sibling reports, review-notes, references, quarantine-store
+and db-quarantine-store directories. Use binary transfer, then check the upload:
+
+python3 -I -S verify-package.py
+
+Python 3 and SSH are required. Database features require PHP CLI with mysqli. File
+restore requires filesystem hard links. No sudo is needed. Test on each host: command
+availability alone does not establish compatibility. Keep compat outside ALL public
+document roots and alternate domain mappings.
+
+2. Create the password-free profile once
+
+From SITE/compat/wp-sentinel:
+
+chmod 700 SITE/compat
+python3 -I -S sentinelctl.py --profile ../site.json init --root ../../public_html --private-dir .. --core-version auto --locale en_GB
+python3 -I -S sentinelctl.py --profile ../site.json show
+
+The profile holds absolute paths, version and locale. Permissions are 600. Existing
+profiles are never overwritten. With --core-version auto the installed version is
+read at each scan. With a fixed version, a report notes when the site no longer matches
+it. Do not add database details, passwords or shell commands to the profile.
+
+chmod changes this directory only. For layouts shared by other accounts, use a
+dedicated private directory instead of changing a shared directory's permissions.
+Symlink paths and nonprivate folders are refused.
+
+3. Scan
+
+python3 -I -S sentinelctl.py --profile ../site.json scan --core --database --plugins --persistence --account-cron
+
+Each run creates a NEW report-UTC-date-time-random directory under compat and prints
+its path. Without optional switches only the file scan runs. Database credentials are
+prompted every time and passed to PHP through stdin. Official checks fetch public
+checksums; they do not upload site content.
+
+Useful limits: --max-file-mb (default 20), --max-files, --db-row-limit (default 10000
+per table) and --db-value-limit. Use --php if the php command is not the right one. On
+sites with many rows, raise --db-row-limit: the report says when a limit was reached.
+
+Partial results must not be interpreted as clean. References remain opt-in:
+
+python3 -I -S sentinelctl.py --profile ../site.json scan --reference plugin:my-plugin=../references/my-plugin-1.0.zip
+
+Repeat --reference as needed using exact installed directory names and trusted
+matching releases. ZIPs are read, never installed or executed.
+
+4. Read the report
+
+Download report.html and open it. Findings are sorted by priority; see RULES.txt for
+what each means. Each finding's Commands section has preview commands to copy.
+
+5. Routine checks and summaries
+
+python3 -I -S sentinelctl.py --profile ../site.json routine-check --core --plugins --persistence
+python3 -I -S sentinelctl.py --profile ../site.json summary
+
+routine-check runs a scan, compares it with the previous inventory, and updates the
+summary. Old findings do not become resolved merely by disappearing from a narrower
+scan. Human reviews remain hash-bound. Summaries include the newest 1000 reports and
+list any that could not be read. Old reports are only removed if you ask.
+
+For scheduled or scripted use, --fail-on high makes the command exit 4 when a high
+priority finding exists. Exit code zero means completion, not a clean bill of health.
+For scheduled checks, alerts and old report cleanup, see MONITORING.txt. No automatic
+remediation or scheduled tasks are installed by this package.
+
+6. Self-tests
+
+The tests are in the development copy's tests folder and are not for upload to a
+host. Run them on your own computer:
+
+python -B -m unittest discover -s tests

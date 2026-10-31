@@ -1,0 +1,139 @@
+{
+  "format": "sentinel-package-1",
+  "release": "0.21.0-rc1",
+  "distribution": "hosting",
+  "files": {
+    "batch.py": {
+      "bytes": 18000,
+      "sha256": "0598bf9593e06b97a3a2ca5f0d9eb54291ea9c78f9e2bf47f1bb82571b8cfd36"
+    },
+    "changes.py": {
+      "bytes": 4769,
+      "sha256": "59d0a572a1dd34aa27aab5abbdbc819bfa697c462363b17bf8f8fe0c22482261"
+    },
+    "database.php": {
+      "bytes": 14499,
+      "sha256": "f749694b4a499d9c193e0ab228bd2944a426c9116d3d88f85b9a4e8d78f87c1e"
+    },
+    "db-content.php": {
+      "bytes": 11582,
+      "sha256": "caec60bef641db8d7dbad383ad4ae07e8dd81cf3f3da5337190ae4e5413781c8"
+    },
+    "db-content.py": {
+      "bytes": 7039,
+      "sha256": "fde51da338c61ad8724180d5bbfdbd474e464d22172eb1e1650eca6103386bce"
+    },
+    "discover.py": {
+      "bytes": 3478,
+      "sha256": "4f69ff182e95b717a538f596a8a1519169c842903ed3660eff06e022bf4cf0b4"
+    },
+    "documentation/ACCOUNT.txt": {
+      "bytes": 4924,
+      "sha256": "b76b77581ba75b0d0e996aed7c3ee765e60976d2a522cf03bc9c96fcf5dd10f7"
+    },
+    "documentation/BATCH-QUARANTINE.txt": {
+      "bytes": 5699,
+      "sha256": "a74f5c644740ee70b6c009d3341b5b4e936093bbcbc8e8e543bc4420421893e6"
+    },
+    "documentation/DATABASE-CONTENT.txt": {
+      "bytes": 5828,
+      "sha256": "13ee9b7f8bb7acff2ce6e4db92e8d50451261c7801d82ef24416658680d5849e"
+    },
+    "documentation/DATABASE-INVENTORY.txt": {
+      "bytes": 3166,
+      "sha256": "cebe93ec4e1ba854442242dcd32eebd7723fbb021b8ce84a81f3313b3d688e7a"
+    },
+    "documentation/DATABASE-TEST.txt": {
+      "bytes": 3919,
+      "sha256": "08b17da5be9291b0f149a42169fc45be916fa07a201f1d0bd820579856006d53"
+    },
+    "documentation/DATABASE-VERIFY.txt": {
+      "bytes": 3327,
+      "sha256": "bd54ddc5bfd3a615f738776f5e28c3633031526a6465319fc996dbbe5e9f0f61"
+    },
+    "documentation/FILE-INVENTORY.txt": {
+      "bytes": 5162,
+      "sha256": "f5a776518269222e3fd6af4ce69c2e3d56015771040301978c2d87920a8e0659"
+    },
+    "documentation/INSTALL.txt": {
+      "bytes": 4033,
+      "sha256": "ffed9242d4f4d952ee791fb3276dd8b2c5fb432d956ddc5f1cce327f6af1e6a6"
+    },
+    "documentation/MANAGEMENT.txt": {
+      "bytes": 4772,
+      "sha256": "88df91738760867477a1b611bc2fbb36f0fc0705c2a41b51305834bdd04195cc"
+    },
+    "documentation/MONITORING.txt": {
+      "bytes": 6800,
+      "sha256": "2ede02135280198369dd6b53f8d5ee69a5b0e3f0284a3a75b5b5af50cc0f03c6"
+    },
+    "documentation/PACKAGE-CHECK.txt": {
+      "bytes": 1747,
+      "sha256": "d1349cbb25e67c000a3be6d2a14f8e0a2cc0e067121ea17d65f3e33d7b64b27e"
+    },
+    "documentation/PERSISTENCE.txt": {
+      "bytes": 3458,
+      "sha256": "587662123549995939e10cdddcdf835d5f6e3a57636c3cf6137c32078f7cd8e2"
+    },
+    "documentation/QUARANTINE.txt": {
+      "bytes": 5836,
+      "sha256": "bbd347c310c990c3b4c859d055947613fc1aed646bf0dbde0fe9078f13d5df5f"
+    },
+    "documentation/README.txt": {
+      "bytes": 4664,
+      "sha256": "7ec547cf74e8ffe970f296d42461c48788dd5989849998e7917ddedd3739cf3e"
+    },
+    "documentation/REMOTE.txt": {
+      "bytes": 4719,
+      "sha256": "c973c29dd62d2a9f3cb66880d28f834ebcc8aeb37d81987ab215ad4d0c6c107d"
+    },
+    "documentation/RULES.txt": {
+      "bytes": 4579,
+      "sha256": "08617cd3fd52fd5b6cf085857b0d8ba5373e13bd1640b11691477605e0076ee6"
+    },
+    "file_changes.py": {
+      "bytes": 7152,
+      "sha256": "7d32498ecf3affa90779756418589ba507b7af9c975cf91d693aabd4e759f3cc"
+    },
+    "manage.py": {
+      "bytes": 25255,
+      "sha256": "804298a11608240d3fdc2491f316ebfc027f844d795cd158f887aa8c78fdbf44"
+    },
+    "monitoring.py": {
+      "bytes": 15965,
+      "sha256": "3047697c99a6f06e506b872a52296db05a87f77b7b965f5d2d3a4bf85ef3d6bf"
+    },
+    "persistence.py": {
+      "bytes": 8783,
+      "sha256": "6227a6b19c78d00584ccb116059b32fff4b19eec419d1e45b0313a4a96d7bccc"
+    },
+    "quarantine.py": {
+      "bytes": 11451,
+      "sha256": "61cb1f61c9d8045205400f5331a1ac7db630720958f7ae093daebac51f99f787"
+    },
+    "routine.py": {
+      "bytes": 13728,
+      "sha256": "70f2b350aaf60ff2c73b0e09e7af37def7150237194b031b5f39b046aac4bb48"
+    },
+    "rules.json": {
+      "bytes": 12341,
+      "sha256": "3be2a9cd2b1f26f323e4c6c3604a83ab369d56e8cf54a761337d8e35508e8e8b"
+    },
+    "sentinel-remote.py": {
+      "bytes": 43989,
+      "sha256": "8e194ff229f18507ff34458bae605d517cbf712a5b2334bc37c4ed6b00981799"
+    },
+    "sentinel.py": {
+      "bytes": 65317,
+      "sha256": "87abb043e3390dc9f81bb7f3186098355febf49257653dadbabddc37c991bf3c"
+    },
+    "sentinelctl.py": {
+      "bytes": 17363,
+      "sha256": "84fa6ece7b28df758f58fdcf06b4bb545552cf76df047987b6b6d0840046f30e"
+    },
+    "verify-package.py": {
+      "bytes": 4266,
+      "sha256": "da446d6191b13391cbac6d98cba8ef794c02c6ce359bd9a382ef3720a3783881"
+    }
+  }
+}

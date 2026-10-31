@@ -1,0 +1,75 @@
+WORDPRESS SENTINEL — DISPOSABLE DATABASE WORKFLOW TEST
+
+This release does NOT enable quarantine of live WordPress database records.
+db-selftest.py and db-selftest.php test the proposed replacement/restore workflow
+using only synthetic data in one newly allocated table. No table name, row ID,
+or column from WordPress can be supplied to this test.
+
+IMPORTANT DIFFERENCE FROM SCANNING
+
+This test WRITES to the database you select. It creates a uniquely named
+sentinel_test_<32 random hex characters> table, inserts harmless data, changes
+and restores that data, then drops only the table it successfully created.
+It never reuses an existing table and never reads or modifies WordPress tables.
+Database audit logs and binary logs may record these operations.
+
+Prefer a separate disposable test database created through your hosting panel.
+The script does not create a database. The selected account needs CREATE, DROP,
+SELECT, INSERT, and UPDATE permissions and an InnoDB-capable server. Do not grant
+server-wide privileges. If permissions are unavailable, report the failure rather
+than trying to bypass hosting controls. No root/sudo is required.
+
+RUN
+
+Upload db-selftest.py and db-selftest.php together in compat/wp-sentinel. From
+that folder run:
+
+python3 -I -S db-selftest.py --work-dir .. --allow-test-table
+
+The flag explicitly authorizes creation/modification/removal of the disposable
+test table. Credentials are prompted locally; the password is hidden and passed
+to PHP through standard input, never process arguments or saved reports. This
+prototype is intended for a local database connection; remote TLS configuration
+is not provided. The helper runs with php -n and requires mysqli in that mode.
+
+CHECKS
+
+- Verifies that the created table actually uses InnoDB.
+- Reads a value without changing it (preview).
+- Preserves exact bytes, including null and UTF-8, in a private backup file.
+- Writes a recovery record before replacing database content.
+- Refuses replacement when the source hash is wrong.
+- Locks the test row in a transaction and verifies a replacement before commit.
+- Refuses restore when a subsequent edit has changed the replacement.
+- Rejects a deliberately damaged backup hash.
+- Restores the exact original bytes and tests explicit transaction rollback.
+- Removes the disposable table after the test.
+
+The later-edit check is sequential simulation, not a test of two concurrent
+database sessions. The damaged-backup check exercises integrity detection; it
+does not corrupt the saved original. Power loss and killed-process recovery are
+not proven by a successful result. Filesystem backup and database commit are not
+one atomic operation.
+
+EVIDENCE AND INTERRUPTIONS
+
+A private sentinel-db-selftest-* directory is retained under --work-dir. It holds
+synthetic backup bytes, allocation/operation records, and test-result.json. No
+database passwords are written. It is kept intentionally for inspection; unlike
+the file self-test it is not automatically deleted.
+
+Normal failures attempt to remove the table created by this run. On a timeout,
+forced termination, or cleanup failure, that test table may remain. allocation.json
+identifies the planned name and recorded state; a planned state alone does not
+prove that this process created a table. Inspect before removing anything. Never
+delete tables based only on the sentinel_test_ prefix. The final report identifies
+a remaining table when cleanup fails normally. Do not retry repeatedly without
+checking a reported cleanup failure.
+
+NEXT GATE
+
+Passing confirms this bounded synthetic workflow on the selected host. It does
+not establish that an arbitrary WordPress value can safely be replaced. Live
+support still requires table/column allowlists, exact snapshots, safe handling
+of serialized data, cache invalidation, recovery after interruptions, and
+record-specific decisions. No live database quarantine command is shipped here.

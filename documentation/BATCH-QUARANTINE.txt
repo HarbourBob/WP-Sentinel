@@ -1,0 +1,125 @@
+WORDPRESS SENTINEL 0.21.0-rc1 - BATCH QUARANTINE
+
+Move hundreds of reviewed files out of a site in one step, and put them back if
+you need to. You still make the decisions: Sentinel writes a list, you check it,
+and only that exact list can be applied.
+
+Each file goes through the same steps as a single quarantine (QUARANTINE.txt):
+its hash is checked, it is backed up, the backup is verified, and only then is
+the file removed. Everything in QUARANTINE.txt about what quarantine does not do
+still applies. It does not clear caches, end sessions or close the way in.
+
+Try this on a staging copy first. It has been tested on fake sites only.
+
+THE THREE STEPS
+
+Run these on the host, from compat/wp-sentinel. Replace PROFILE with your profile.
+
+1. Make the plan. This changes nothing.
+
+   python3 -I -S sentinelctl.py --profile PROFILE batch-plan --report PATH/report.json
+
+   This writes a new batch-... folder in your private folder, holding plan.txt and
+   skipped.txt, and prints how many files are in the plan, by folder.
+
+2. Check the plan, then preview it. This changes nothing either.
+
+   Read plan.txt. To spare a file, delete its line or start the line with #. Read
+   skipped.txt too: those findings still need dealing with.
+
+   python3 -I -S sentinelctl.py --profile PROFILE batch-quarantine --plan PATH/plan.txt
+
+   The preview checks every file against the plan, lists any problems, and prints
+   the plan's SHA-256. Editing the plan changes that hash, so preview again after
+   any edit.
+
+3. Apply it. This changes the website.
+
+   python3 -I -S sentinelctl.py --profile PROFILE batch-quarantine --plan PATH/plan.txt --apply --plan-sha256 HASH
+
+   Check the site straight away, then run a new scan.
+
+CHOOSING WHAT GOES IN THE PLAN
+
+  --priority high      The default: high priority findings only.
+  --priority medium    Adds medium. --priority review adds everything.
+  --rule NAME          Only this rule. Repeat it for more.
+  --path FOLDER        Only this file or folder, relative to the site. Repeatable.
+  --include-critical   Allow files WordPress needs in order to run (see below).
+
+A low priority does not mean a file is harmless, and a high priority does not
+mean it is malware. Legitimate plugins do set off some rules, so look through the
+plan rather than trusting it. Rules are in RULES.txt.
+
+WHAT IS LEFT OUT, AND LISTED IN skipped.txt
+
+- Files you reviewed as benign, as long as their content has not changed since.
+- Files with no complete hash, such as files too large to read in full, or files
+  reported as missing.
+- Files WordPress needs: .htaccess, wp-config.php, index.php and the other standard
+  files in the site root, anything in wp-admin or wp-includes, and any official
+  file that fails its checksum. Removing these usually takes the site down. They
+  need replacing with a clean copy, not just removing. An extra file planted in
+  wp-admin or wp-includes is not protected, and can go in the plan.
+- Paths outside the site, or names with tabs or control characters. Use
+  file-quarantine for these.
+- Database findings. Quarantine only handles files.
+
+Theme and plugin files are not protected. Removing a file a theme or plugin
+depends on can break the site, which is why going in stages helps.
+
+GOING IN STAGES
+
+  --limit 50     Move at most 50 files now. Run the same command again for the next 50.
+
+Check the site between stages. Files already moved are recognised and left alone.
+
+WHEN SOMETHING GOES WRONG
+
+A file that differs from the plan: if any file has changed, gone missing or become
+unsuitable since the scan, the whole batch stops before changing anything. A file
+that changes after a scan may mean an attacker is still active, so find out why.
+Either rescan and make a new plan, remove that line and preview again, or add
+--skip-problems to leave those files where they are and move the rest.
+
+A file that fails during the run: the rest carry on, and the file stays in place.
+After 5 failures in a row, the run stops, since something like a full disk would
+otherwise fail for every file.
+
+An interrupted run: run the same command again. It finds what was already moved,
+including from the store if the crash came before the receipt was written, and
+carries on with the rest.
+
+Every move is recorded in receipt.jsonl beside the plan. Keep that folder. The
+undo needs it, and old report cleanup does not remove it.
+
+Exit codes: 0 finished (or a --limit stage finished), 2 stopped with an error,
+3 some files were not moved or restored, or the batch stopped on a problem.
+
+UNDOING A BATCH
+
+  python3 -I -S sentinelctl.py --profile PROFILE batch-restore --plan PATH/plan.txt
+
+This previews and prints the hash. Add --apply --plan-sha256 HASH to go ahead. Add
+--only wp-content/some/file.php, repeatable, to restore just the files you need,
+which is the usual case if the site breaks.
+
+Restoring makes the files active again, including any malware among them. It will
+not overwrite a file that now exists at that path. Backups stay in the store.
+
+IF YOU SCAN FROM YOUR OWN COMPUTER
+
+Quarantine has to run on the host, and so the report has to be there too, outside
+the website. Copy it up from your computer first, for example:
+
+  scp -P PORT -i KEYFILE report.json USER@HOST:private-folder/report.json
+
+Then use that path with --report. Check that the report is recent, because any file
+that has changed since then will stop the batch.
+
+LIMITS
+
+Up to 5000 files in one plan, each up to 50 MiB. Files that are symlinks or hard
+links, have special permissions or belong to another user are refused, as they are
+for a single quarantine. Quarantined files stay on the hosting account, so an
+attacker with access to that account can still reach them.

@@ -1,0 +1,60 @@
+WORDPRESS SENTINEL — AUTHENTICATED READ-ONLY RECORD VERIFICATION
+
+Upload updated db-content.py, db-content.php, and manage.py together.
+
+VERIFY A PRESERVED OPERATION
+
+python3 -I -S db-content.py verify --root ../../public_html --store ../db-quarantine-store --id OPERATION_ID
+
+Use the same host spelling, database name, and table prefix as the original
+operation. Credentials are entered locally and never saved in the result.
+The host/database/table identity must match the private recovery record.
+
+verify refuses --apply and opens a READ ONLY database transaction. It reads the
+selected row and metadata, compares its content and full-row fingerprints with
+the preserved original and expected replacement, then rolls the transaction back.
+No row UPDATE, cache purge, WordPress bootstrap, or restore is performed.
+
+It DOES write a small verification-*.json receipt in the private recovery folder
+and briefly takes the tool's store lock. It does not change record.json or the
+original backup. No raw content or credentials are included in the receipt.
+The command therefore needs filesystem write permission for the private store.
+
+POSSIBLE RESULTS
+
+matches-original-row: every saved column and the content matched the original
+snapshot at the time of the read.
+
+matches-replacement-row: every column and the content matched the expected
+post-replacement snapshot at the time of the read.
+
+differs-from-both-recorded-states: one or more columns differ. The separate
+content_matches_original/content_matches_replacement flags distinguish content
+changes from changes elsewhere in the row. This is NOT an automatic malware
+verdict: routine edits, timestamps, title changes, and status changes can explain it.
+
+Missing records, unsupported schemas, identity mismatches, connection failures,
+or bad backups return a failed verification, not a clean-state assertion.
+No automatic restoration, state reconciliation, or repair follows a result.
+
+ADD THE RECEIPT TO A NEW SUMMARY
+
+python3 -I -S manage.py consolidate --root ../../public_html --reports-dir .. --output ../summary-006 --reviews ../review-notes --store ../quarantine-store --db-store ../db-quarantine-store
+
+The offline inventory still makes no database connection. It now displays the
+latest saved authenticated check with its timestamp under last_authenticated_check.
+It recomputes the claimed result from the receipt hashes and rejects inconsistent
+or mismatched receipts. A saved check does not prove the row is unchanged NOW.
+The top-level offline inventory statement and the dated check refer to different
+operations; they must not be interpreted as contradictory live assertions.
+
+The latest recorded failure is shown rather than silently presenting an older
+success. A timeout or failure before valid helper output may leave no new receipt;
+always retain terminal failure information and read the date on any older result.
+These receipts are local records, not signed attestation: same-account attackers
+could modify backups and receipts together. System trust and independent evidence
+remain outside the scope of these checks.
+
+Local validation covers verify's write guard, receipt identity/hash consistency,
+original versus changed state classification, and PHP syntax. The new READ ONLY
+transaction path still needs validation against the hosting database.

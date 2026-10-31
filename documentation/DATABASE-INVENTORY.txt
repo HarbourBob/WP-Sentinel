@@ -1,0 +1,60 @@
+WORDPRESS SENTINEL — OFFLINE DATABASE RECOVERY INVENTORY
+
+This adds database recovery records to manage.py and consolidated summaries.
+It does not connect to MySQL, request credentials, restore content, or modify
+backup records. Original post content and full row snapshots are never included
+in the generated summary. Keep the original evidence folder private.
+
+COMBINED SUMMARY
+
+From compat/wp-sentinel, using a new output directory:
+
+python3 -I -S manage.py consolidate --root ../../public_html --reports-dir .. --output ../summary-005 --reviews ../review-notes --store ../quarantine-store --db-store ../db-quarantine-store
+
+The existing --store remains FILE quarantine. The new --db-store is the separate
+database replacement/restore store. Do not swap them. Earlier scan reports and
+existing v0.9 database recovery records are supported without migration.
+
+DATABASE INVENTORY ONLY
+
+python3 -I -S manage.py database-inventory --root ../../public_html --db-store ../db-quarantine-store
+
+WHAT IS CHECKED
+
+- Recognized record format and matching website root.
+- Target table/ID and digest field formatting.
+- Original backup bytes against their recorded SHA-256.
+- Complete saved row snapshot against the original row fingerprint.
+- The snapshot's post_content matches original.bin, and its ID matches the record.
+- Presence of incomplete operation folders and the tool's operation lock.
+
+The PHP-compatible row fingerprint uses sorted column names and PHP JSON slash
+escaping. Snapshot values are validated as canonical base64 or null. Payloads
+are bounded to 4 MiB, records to 12 MiB, and store entries to 10000. Symlink paths
+are rejected. No database values or scripts are executed.
+
+WHAT IS NOT CHECKED
+
+recorded_state is historical: restored does not prove the live row is still
+unchanged, and prepared can mean an interrupted operation before OR after commit.
+live_database_state always says not checked in this offline inventory. A current
+database assertion needs a separate authenticated read; it must not be inferred
+from backups. The expected replacement-row fingerprint cannot be recomputed from
+the original snapshot alone because replacement content is not retained.
+
+The original record format does not embed its operation ID; the inventory reports
+the folder name as ID. Stored hashes are not signatures and do not authenticate
+evidence against another process with access to the same account. It can rewrite
+both data and recorded hashes. Keep independent protected evidence when needed.
+
+INTERPRETATION
+
+backup_integrity verified means internal consistency of the preserved original
+data, not a clean-site or current-live-state verdict. FAILED means inconsistency;
+do not attempt restore until investigated. not verified or inspection failed means
+the inventory could not establish integrity. Incomplete folders are preserved and
+reported, never automatically deleted or repaired. Unrecognized entries are not
+opened. This inventory does not automatically reconcile interrupted operations.
+
+Other existing functions and database write commands are unchanged by this
+release. A summary can therefore be regenerated without pausing site traffic.

@@ -1,0 +1,98 @@
+WORDPRESS SENTINEL 0.21.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
+
+sentinel-remote.py runs on your computer. It connects with ssh, uploads the scanner
+to a temporary folder on the host, runs it, copies the evidence back, removes the
+temporary folder, and compares the new file inventory with earlier runs held on your
+computer. Nothing stays installed on the host.
+
+WHY
+
+Anything stored on a hosting account can be altered by an attacker running as that
+account, including earlier reports and baselines. Evidence held on your computer
+cannot be, so a later comparison starts from something the host could not rewrite.
+
+REQUIREMENTS
+
+Your computer: Python 3.8 or later and an ssh client. Key-based SSH is recommended:
+without a key or agent you will be asked for your passphrase at each step.
+The host: Python 3.7 or later, plus PHP CLI with mysqli for --database.
+
+RUN A SCAN
+
+python sentinel-remote.py scan --host user@example.com --root /home/user/public_html --core --plugins --persistence
+
+Add --database to check the database. You are prompted for the details in your
+terminal over the SSH connection, and they are not stored. To avoid the prompt, use
+--db-from-wp-config (see MONITORING.txt). Other options match
+sentinelctl: --account-cron, --max-file-mb, --max-files, --db-row-limit,
+--db-value-limit, --php, --fail-on and --locale. Use --port, --identity,
+--ssh-command and --remote-python if your connection needs them.
+
+--core reads the installed version from the site unless you give --core-version.
+
+The temporary folder is created in your home folder on the host. If that folder is
+inside a website, use --remote-temp to choose one that is not.
+
+--reference plugin:folder=LOCAL.zip uploads a trusted ZIP for that run only.
+
+WHAT YOU GET
+
+sentinel-evidence/HOST-ID/RUN/ on your computer, one folder per run:
+
+  report.html, report.json   The report.
+  file-inventory.json        File hashes from this run.
+  file-changes.json          Changes since the previous run, when there is one.
+  EVIDENCE.json              A hash of each file, linked to the previous run.
+
+chain.json links the runs in order. Check that nothing has changed with:
+
+python sentinel-remote.py verify
+
+Exit codes for scan are those of the scanner, listed in RULES.txt. For verify: 0 all
+match, 1 something differs, 2 no evidence found.
+
+LIMITS: WHAT THIS DOES NOT PROVE
+
+- A compromised host can still lie. It controls the python3 that runs the scan and
+  could return false results. Comparing uploaded file hashes catches simple tampering
+  only, because the host reports those hashes too. This reduces the risk of tampered
+  evidence; it does not remove the risk of a dishonest scan.
+- For high confidence, also scan a backup copy on a machine you trust.
+- The chain shows evidence is unchanged since it reached your computer. It is not a
+  signature: someone able to edit your computer's files could rebuild it. Keep the
+  folder somewhere backed up.
+- Database passwords typed at the prompt pass through the host, as with any SSH
+  session. Rotate credentials after an incident.
+- Copied reports hold file paths, record identifiers and login names. Keep them private.
+- Evidence sent back is treated as untrusted: only plain files with simple names are
+  accepted, up to 50 files and 1 GiB.
+
+Quarantine and restore still run on the host, because their private store must be
+there. Keep a hosted install for those (see INSTALL.txt). The commands shown in a
+remote report apply to that hosted install, with your profile in place of PROFILE,
+and report paths must be on the host for the review command. BATCH-QUARANTINE.txt
+shows how to copy a report up for a batch.
+
+IF IT WILL NOT CONNECT
+
+Run this on your own computer, not in an SSH session on the host. A prompt mentioning
+a path such as /home/customer/.ssh means it is running on the host, which then has to
+log in to itself and keeps the evidence where an attacker could alter it.
+
+Many hosts use a port other than 22. If ssh says a key is "known by the following
+other names" with a port in brackets, such as [host]:18765, add that port:
+
+python sentinel-remote.py discover --host user@example.com --port 18765 --identity PATH-TO-PRIVATE-KEY
+
+Test the login on its own first. This should print the host's folder and nothing else:
+
+ssh -p 18765 -i PATH-TO-PRIVATE-KEY user@example.com pwd
+
+TESTING STATUS
+
+Run successfully against a real host over real SSH by the project owner in October
+2026. Quoting, cleanup, tampering and unsafe evidence are tested on Windows with a
+stand-in for ssh. For a run with --database, check its result on your own host.
+
+For scheduled runs, alerts and removing old runs, see MONITORING.txt. To scan every
+install on the account, see ACCOUNT.txt.

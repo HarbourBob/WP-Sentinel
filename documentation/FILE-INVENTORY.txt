@@ -1,0 +1,87 @@
+WORDPRESS SENTINEL — OPTIONAL FILE INVENTORY
+
+Upload the package into compat/wp-sentinel while no operation runs. Preserve
+profiles, reference ZIPs, reviews, reports and recovery stores. Existing commands
+work without the new switch. No remediation is automated.
+
+First test disposable fixtures on the host:
+
+python3 -I -S test_file_inventory.py
+
+Seven tests use temporary fake sites only. These test added/changed/missing files,
+exclusions, count and size limits, mocked permission failures, interrupted reads,
+wrong-site/reversed input rejection and the command-line round trip. They do not
+read or change the real site. This is not a power-loss or hostile-race test.
+
+Create the first inventory using your existing saved-reference profile:
+
+python3 -I -S sentinelctl.py --profile ../site-references-12.json scan --file-inventory
+
+Repeat the same command for a second inventory. Do not deliberately edit the
+live website to test this: disposable tests already cover those changes.
+Each new report-* directory includes file-inventory.json. Preserve both folders.
+Other scan switches such as --core --database --plugins --persistence and
+--account-cron remain opt-in. This command alone runs file and saved-reference
+checks; it does not refresh database or startup checks.
+
+Compare two sequential inventories (replace EARLIER and LATER with actual names):
+
+python3 -I -S sentinelctl.py --profile ../site-references-12.json file-changes --before ../report-EARLIER/file-inventory.json --after ../report-LATER/file-inventory.json
+
+A new file-changes-* folder receives file-changes.json and file-changes.html.
+The comparison is offline and does not connect to the website or database.
+
+ADDED: a hashed file appeared after a completed earlier traversal that did not
+observe the path. This is an observation between scans, not proof of creation time.
+CHANGED: both reads succeeded but SHA-256 or byte size differs.
+MISSING: a previously hashed path was not observed in a completed later traversal.
+UNCHANGED: both reads succeeded and hash/size match; this does not imply benign.
+UNKNOWN: an exclusion, size limit, inaccessible/changed file, type change, symlink
+or incomplete traversal prevents a reliable content comparison. An unchanged
+excluded configuration file will still be unknown. Directory/type observations
+may also appear here. Directory traversal failures, skipped symlink directories
+and count limits conservatively prevent missing/added conclusions across the
+affected inventory, even for unrelated paths.
+
+The inventory hashes the same bytes read during the scanner's file pass. It
+records relative paths, sizes, SHA-256, read/skip states, scan times and limits,
+not file contents. wp-config.php and .env files are now hashed; their contents are never saved. Reports can expose
+private filenames, so retain them outside all public document roots.
+
+Publishing uses a temporary JSON file followed by replacement of the final
+filename after flushing the file. Interrupted scans do not publish a completed
+inventory. An interruption while saving may leave file-inventory.json.tmp;
+do not rename it to bypass validation. Run a new scan into a new output folder.
+The inventory is published after the file pass, before optional checks; it may
+exist even if a later database/network check fails. Read coverage in both files.
+
+This is not an atomic filesystem snapshot: live writers can change paths during
+or after traversal, and hostile same-account races are not fully prevented.
+Permission tests inject failures; actual hosting permissions may behave differently.
+Hash files are not authenticated against same-account tampering. Retain independent
+off-account evidence if integrity against compromise is required. No contents
+can be restored from a hash inventory. Keep real backups.
+
+Old reports without inventories cannot supply retrospective file hashes. The
+first inventory is an observed baseline, not a claim that every file is clean.
+Existing finding reviews remain separate from file-inventory comparisons.
+
+LOCAL VALIDATION
+52 tests run: 51 passed, one Windows symlink-creation test skipped. New inventory
+tests include a real CLI scan/compare round trip using only synthetic fixtures.
+File and database quarantine/restore engines are unchanged. No real network loss,
+server restart or power-loss testing was performed.
+
+0.15.1 REPORTING UPDATE
+Added and missing directories are listed separately as directories_added and
+directories_missing in JSON and HTML. File counts retain their previous meaning.
+Unchanged directories are omitted. Type changes, symlinks and exclusions remain
+unknown; absence in an incomplete traversal never confirms an addition/removal.
+Existing inventories work unchanged. Re-run file-changes to create a new report;
+previous reports are retained. No website scan is needed to recompare inventories.
+
+0.18 UPDATE
+A skipped symlink or unreadable directory now only prevents added/missing conclusions
+for paths inside it; a file limit still affects the whole inventory. Older inventories
+keep the earlier all-or-nothing behaviour. The new fields are uninspected_directories,
+file_limit_reached and traversal_scope_known.

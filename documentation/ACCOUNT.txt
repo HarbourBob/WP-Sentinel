@@ -1,0 +1,108 @@
+WORDPRESS SENTINEL 0.21.0-rc1 - SCANNING A WHOLE ACCOUNT
+
+Infections often return from a neighbouring site: an old staging copy, a forgotten
+addon domain or a backup folder that still runs. sentinel-remote.py can find every
+WordPress install on an SSH account and scan each one.
+
+SEE WHAT IS THERE FIRST
+
+python sentinel-remote.py discover --host user@example.com
+
+This only lists installs. It looks under your home folder, and writes nothing on the
+host. An install is a folder holding wp-settings.php and wp-includes/version.php. The
+list also shows wp-config.php files with no WordPress beside them, which are often
+leftovers that still hold a database password, and any folder it could not read.
+
+If your websites are outside your home folder, add --start with the folder on the
+host. Repeat it for several.
+
+SCAN EVERYTHING
+
+python sentinel-remote.py scan-all --host user@example.com --core --plugins --persistence --db-from-wp-config
+
+Each install is scanned in turn, with its own evidence, inside sentinel-evidence. If
+you have already run "scan" with the same path, its history carries on. When a site
+fails, the others still run. --core reads each site's own version, and
+--db-from-wp-config reads each site's own wp-config.php. --account-cron runs once,
+because the crontab belongs to the account.
+
+Other options:
+  --exclude PATH   Leave out an install and anything inside it. Repeatable.
+  --max-sites N    Scan at most N installs (default 50). Others are listed as not
+                   scanned, and the exit code is 3.
+
+Options for one site's prompt or reference copies (--database, --db-credentials,
+--reference and a fixed --core-version) are not available here, because one answer
+would not fit every site. Use "scan" for those.
+
+NESTED SITES
+
+An install inside another, such as public_html/staging, is scanned as its own site
+and skipped in the parent's scan, so findings are not listed twice. If you exclude it
+or it goes over --max-sites, it stays in the parent's scan, so it is still looked at.
+
+WHAT YOU GET
+
+sentinel-evidence/account-HOST-ID/summary-TIME.html lists every install with its
+version, status, findings by priority and file changes, linked to each full report.
+"verify" checks each site's evidence as usual.
+
+SCHEDULED RUNS AND ALERTS
+
+Add the options from MONITORING.txt:
+
+python sentinel-remote.py scan-all --host user@example.com --core --plugins --persistence --db-from-wp-config --unattended --alert-config alerts.json --prune-keep 30
+
+Each run sends at most one message, covering every site. Alert settings are the same
+as for one site, and site_name names the account here. The message covers:
+
+- New or changed findings on any site, and any site whose scan failed.
+- A new WordPress install, marked if it is inside wp-content, because attackers
+  sometimes plant a copy there. The first run only records what exists.
+- An install that is no longer found.
+- A search that hit its limit, or sites left out by --max-sites.
+
+The first run's message can be long. Webhook messages are cut short at about 1,900
+characters, so the full list is in the email or summary page.
+
+--prune-keep applies to each site, and keeps only the newest account summaries.
+
+EXIT CODES
+
+  0   All finished. This does not mean the sites are clean.
+  2   At least one site failed, or the search itself failed.
+  3   Some sites have gaps, or some were not scanned.
+  4   --fail-on matched on at least one site.
+  5   An alert was due but could not be delivered.
+
+If several apply, the order is 2, 5, 4, 3.
+
+LIMITS
+
+- Only WordPress is scanned. Other PHP software on the account is not, and neither
+  are accounts you cannot reach over this SSH login. A shared host's other customers
+  are out of scope.
+- The search does not follow symbolic links. It skips mail, caches, .git, node_modules
+  and similar folders, and stops at 15 levels or 500,000 folders, saying so if it does.
+- A compromised host can hide an install from the search, as with any answer it gives.
+- Plain archives such as .zip backups are not opened. Copies inside them are not found.
+- Sites run one after another, so a large account can take hours. Runs for an account
+  that overlap are refused. A lock left by a crash expires after 12 hours.
+- Findings may be repeated in reports made before this version if a nested site was
+  scanned within its parent. The first comparison after that lists the nested folder
+  as unknown rather than removed.
+
+RUNNING ON THE HOST
+
+scan-all runs from your own computer only. To get the list on the host itself:
+
+python3 -I -S discover.py
+
+Then create a profile for each site (see INSTALL.txt). Note that without
+--separate-site, a parent's scan will include any nested site as well.
+
+TESTING STATUS
+
+Tested on Windows with a stand-in for ssh, and a stand-in mail server, on fake sites.
+Not yet run against a real multi-site account. Run "discover" first and check that
+the list matches what you expect.

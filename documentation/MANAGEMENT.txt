@@ -1,0 +1,88 @@
+WORDPRESS SENTINEL — REPORT HISTORY, REVIEWS, AND INVENTORY
+
+manage.py does not execute site code or modify site files. It writes new summary
+folders and explicit review notes outside the website. Inventory reads preserved
+files and their original paths to verify hashes; it does not restore anything.
+
+UPLOAD
+
+Upload manage.py beside sentinel.py and quarantine.py, and update sentinel.py
+and database.php from this release. Existing scan reports and quarantine stores
+remain usable. Do not replace or delete their contents.
+
+CONSOLIDATE EXISTING REPORTS
+
+From compat/wp-sentinel:
+
+python3 -I -S manage.py consolidate --root ../../public_html --reports-dir .. --output ../summary-001 --reviews ../review-notes --store ../quarantine-store
+
+The command finds report-*/report.json directly below compat. Use a reports
+directory belonging to ONE website. It rejects new reports containing another
+site root. Older reports have no site identity: it cannot prove they belong to
+this site and explicitly labels them as legacy reports. Review the imported list.
+
+The output folder must be new; use summary-002 for a later summary. Download
+summary.html to read on your computer or summary.json for structured review.
+An absent review-notes folder simply means no review notes have been recorded.
+An absent quarantine store is reported, not treated as evidence of no past actions.
+
+WHAT THE SUMMARY MEANS
+
+It is cumulative history, NOT a fresh scan and NOT a current clean-site verdict.
+Last-known checks preserve their original dates and source reports. A later run
+that omits database or core verification does not erase the earlier result.
+Each distinct finding/content-hash snapshot stays visible. Absence from a later
+report is not interpreted as resolved because scan scopes and limits can differ.
+All report limitations are preserved under Scan history and coverage limits.
+
+RECORD A REVIEW
+
+Only record a benign decision after inspecting that exact content. Use the
+original report path and the 1-based finding index displayed in the summary.
+Use its full SHA-256, not a placeholder or a hash of a different file/version.
+
+python3 -I -S manage.py review --root ../../public_html --report ../report-NNN/report.json --finding-index NUMBER --sha256 EXACT_HASH --note "Explain what was inspected and why it is benign" --reviews ../review-notes
+
+The command writes a new immutable note. It does not alter old reports or hide
+findings. Matching requires the website root, source, location, rule, and exact
+content SHA-256. Changed bytes do not inherit approval. A change to the rule can
+also require review again. Notes and hashes are local records, not a tamper-proof
+audit trail; another process running as your hosting account could modify them.
+
+To withdraw an approval, repeat the command with --decision withdraw and a note.
+Regenerate the summary after changing review notes. Existing summaries do not
+update automatically.
+
+Only findings with a complete content hash can be marked reviewed. Missing-file
+observations, old database findings without hashes, and truncated values cannot
+be approved with this mechanism. Rescan with v0.6 to obtain missing fingerprints,
+then inspect the content before approving; old reviews are not inferred.
+Database hashes describe the selected value returned over the UTF-8 connection,
+not the entire record, other columns, or the whole database.
+
+QUARANTINE INVENTORY ONLY
+
+python3 -I -S manage.py inventory --root ../../public_html --store ../quarantine-store
+
+For each item it reports the recorded operation state, backup integrity, and
+whether the original path is absent, holds the same bytes, or holds different
+bytes. These are separate facts: a record saying restored does not guarantee the
+file is still present or unchanged. A backed-up record can reflect an interrupted
+operation. The utility reports lock presence but never removes locks or repairs
+records automatically. Read QUARANTINE.txt for recovery rules.
+
+PRIVACY AND BOUNDS
+
+Keep outputs outside ALL public web directories. The tool only knows the selected
+root and cannot discover sibling web aliases. Reports include relative file paths,
+site root, table/record identifiers, review notes, and quarantine history. Review
+before sharing. HTML escapes imported text; no site scripts are embedded or run.
+JSON inputs are capped at 32 MiB, scan reports at 1000, review/store entries at
+10000. Quarantine payload reads use the utility's 50 MiB bound. Symbolic links
+in private output paths are rejected. A hostile process can still race reads.
+
+VERSION SCOPE
+
+The scanner remains read-only, and quarantine.py remains explicit file-only
+containment. Database quarantine, automatic cleaning, process/cron remediation,
+and a whole-host security guarantee are NOT provided.

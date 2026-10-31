@@ -1,0 +1,107 @@
+WORDPRESS SENTINEL - EXPLICIT FILE QUARANTINE / RESTORE
+
+sentinel.py remains read-only. quarantine.py is a separate optional utility.
+No findings are automatically quarantined. Test this utility on a disposable staging
+installation before relying on it for an incident.
+
+REQUIREMENTS AND LIMITS
+
+Ordinary SSH, Python 3, permission to read/remove the selected file and write
+to a private store. No root or sudo. Choose a store outside ALL public website
+directories, not just the root being scanned. The tool checks separation from
+the selected root; it cannot discover every web-server alias or sibling site.
+
+The same hosting account can still access the store. Permissions and a .bin
+extension do NOT prevent an attacker running as that account from reading or
+executing the archived code. Keep an independent offline copy of evidence.
+Quarantine removes one active pathname; it does not stop running processes,
+clear PHP opcode caches, invalidate sessions, fix vulnerabilities, revoke stolen
+credentials, or remove other backdoors. It cannot promise attacker containment.
+
+Pause web traffic and background writers through the host's controls before
+applying operations, where possible. A WordPress maintenance plugin alone may
+not stop PHP execution or cron. This utility rechecks content and metadata but
+cannot eliminate races with a hostile process changing the filesystem.
+
+Only regular files up to 50 MiB are supported. Symlink paths, hard-linked
+sources, special permission bits, and files owned by another user are rejected.
+This is preservation, not automatic clean-file replacement. Removing a required
+theme/plugin/core file can take the site offline. For many files at once, see
+BATCH-QUARANTINE.txt, which uses this same utility for each file.
+
+PREVIEW QUARANTINE - DOES NOT CREATE A STORE OR CHANGE THE SITE
+
+From compat/wp-sentinel:
+
+python3 -I -S quarantine.py quarantine --root ../../public_html --store ../quarantine-store --file wp-content/uploads/EXAMPLE.php
+
+Replace the example relative path with an actual file already reviewed as
+malicious. The preview prints its SHA-256, size, and intended action. It does
+not print file contents. Do not use a currently reviewed benign file as a test.
+
+APPLY - CHANGES THE WEBSITE
+
+Repeat the preview command and append:
+  --apply --sha256 THE_EXACT_REVIEWED_SHA256
+
+The digest must match the current file. The tool saves payload.bin and a
+record.json in a unique private store subdirectory, verifies the saved bytes,
+then removes the active copy. The original bytes are preserved, not destroyed.
+Save the returned quarantine ID. A private store normally has mode 700; stored
+files have mode 600. UID, GID, original permissions, modification time, path,
+SHA-256, and operation state are recorded. Access time is not restored.
+
+PREVIEW RESTORE
+
+python3 -I -S quarantine.py restore --root ../../public_html --store ../quarantine-store --id RETURNED_ID
+
+APPLY RESTORE
+
+Append --apply to that command only after reviewing the stored file. If you add
+--sha256 it must match the stored file, or nothing is restored. Restore
+reactivates the file. It validates the stored hash, requires the original parent
+directory and root, and refuses to overwrite any existing destination. It uses
+an atomic hard-link publication; unsupported filesystems fail instead of using
+an overwrite-prone fallback. Original basic mode, group where permitted, and
+modification time are restored. ACLs, extended attributes, and ownership changes
+requiring privileges are not handled. The archived payload remains preserved.
+
+INTERRUPTIONS AND RECOVERY
+
+Never assume an error means no change occurred. Records progress through
+preparing, backed-up, quarantined, and restored. A crash after removal but before
+the final record update may leave backed-up status with an absent source. Inspect
+the source and archive before retrying. Restore can recover a verified payload
+when its destination is absent even if the previous operation was interrupted.
+Power-loss durability is not guaranteed; keep independent backups.
+
+The .operation-lock directory serializes this utility's operations only. A killed
+process may leave it behind. The error says which process took the lock and when.
+Confirm no operation is running before removing a stale lock. Do not delete quarantine item folders or payloads to clear a lock.
+
+TESTING AND RELEASE STATUS
+
+Local Windows tests exercised preview, round-trip preservation, corrupted backup
+rejection, wrong hashes, path traversal, overwrite refusal, and tool locking.
+Symlink creation was unavailable to the local test account, so that integration
+test was skipped. Linux permissions/group handling and hosting hard-link
+support still need a staging test. This is a prototype, not a forensic product.
+
+Database quarantine/restore is NOT implemented. It needs record-specific handling
+and independent backups; no generic deletion or replacement of database rows is
+safe merely because a script marker was found.
+
+VERSION 0.5.1 — HOST SELF-TEST
+
+Upload selftest.py alongside quarantine.py. From compat/wp-sentinel run:
+  python3 -I -S selftest.py --work-dir ..
+
+The work directory must be private and outside public website directories.
+The self-test creates a uniquely named temporary folder there, builds a fake
+site with inert text fixtures, applies quarantine and restore to those fixtures,
+and cleans up its own temporary folder. It does not use your actual WordPress
+root or quarantine store. It tests Unix permissions and symlink rejection when
+supported, as well as unchanged bytes, modification time, overwrite protection,
+backup integrity, and operation records. Review skipped checks as well as status.
+A passed result does not prove security against a concurrent attacker or power
+loss. If interrupted, an isolated sentinel-selftest-* temporary folder may remain.

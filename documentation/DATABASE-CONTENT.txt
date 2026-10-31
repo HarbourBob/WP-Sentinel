@@ -1,0 +1,102 @@
+WORDPRESS SENTINEL — EXPERIMENTAL POST/PAGE CONTENT PRESERVATION
+
+This is a narrow, explicit replacement tool, not automatic database cleaning.
+The PHP helper is new and still needs hosting validation on a disposable draft.
+Local tests cover argument guards and PHP syntax, not this helper's live database
+transactions. The earlier synthetic self-test does not substitute for this test.
+
+SUPPORTED SCOPE
+
+One ID in the selected prefix's posts table; post_type must be post or page.
+Only post_content changes. No deletion, account modification, options, postmeta,
+serialized settings, custom post types, revisions, or arbitrary table selection.
+Source and replacement contents are bounded to 4 MiB; the complete saved row
+is bounded to 8 MiB of base64 JSON. Replacement must be UTF-8. Serialized-looking
+post_content is rejected. A real ID primary key and InnoDB storage are required.
+Visible database triggers cause refusal. Confirm the table has standard WordPress
+schema and no triggers: information_schema visibility depends on DB privileges.
+
+This does not neutralize code stored in Elementor metadata, options, other rows,
+cached pages, running processes, or files. Replacing a value also does not fix the
+entry point. Source inspection and replacement selection remain human decisions.
+
+BEFORE ANY APPLY
+
+Make an independent database backup. First validate on a disposable draft post.
+Pause traffic and background writers using trusted hosting controls where
+possible. Direct SQL bypasses WordPress hooks, revisions, modified timestamps,
+search indexes, persistent object caches, page caches, and CDNs. Arrange relevant
+cache clearing before resuming traffic. The tool does not execute WordPress to
+purge them because the installation may be compromised.
+
+Store evidence and replacement files outside ALL public website directories.
+Backups include the entire selected row, potentially private content and metadata.
+Keep them private and copy evidence offline. Same-account attackers can access or
+tamper with these records. Hashes detect accidental changes, not authenticated
+provenance. Do not share the full backup row without checking sensitive content.
+
+FIRST TEST: PREVIEW A DISPOSABLE DRAFT
+
+1. Upload db-content.py and db-content.php alongside quarantine.py.
+2. In WordPress, create a draft post with harmless text such as:
+   Sentinel disposable database test - original content.
+   Save it as a draft and note its numeric ID from the edit URL.
+3. Create compat/replacement-test.txt with different harmless text:
+   Sentinel disposable database test - replacement content.
+4. From compat/wp-sentinel, replacing POST_ID with that draft's ID, run:
+
+python3 -I -S db-content.py replace --root ../../public_html --store ../db-quarantine-store --post-id POST_ID --replacement ../replacement-test.txt
+
+Enter connection details locally. Preview does not write a backup or change any
+database value. It returns content_sha256, row_sha256, and replacement_sha256.
+Inspect your original draft and replacement file; the preview contains no raw
+content. Use the exact host string consistently on subsequent operations.
+
+APPLY AFTER PREVIEW REVIEW
+
+Repeat the exact preview command and add:
+  --apply --maintenance-window --sha256 CONTENT_HASH --row-sha256 ROW_HASH --replacement-sha256 REPLACEMENT_HASH
+
+All three hashes must match. --maintenance-window acknowledges responsibility
+for paused writers and cache handling; it does not pause anything automatically.
+The helper locks the row, checks hashes, preserves original bytes plus the entire
+row snapshot, writes a recovery record, updates only post_content, verifies the
+entire resulting row, and commits. It does NOT use an empty replacement by default.
+Save the operation ID shown before the request and returned in the result.
+
+RESTORE PREVIEW
+
+python3 -I -S db-content.py restore --root ../../public_html --store ../db-quarantine-store --id OPERATION_ID
+
+It requires the current full row to match the exact expected post-replacement
+snapshot and verifies the archived original. Any later change to the row blocks
+restore. This includes normal WordPress edits, modified times, or status changes.
+Do not manually change record.json to bypass a refusal. Resolve conflicting edits
+through an independently reviewed recovery process instead.
+
+RESTORE APPLY
+
+Repeat restore preview with --apply --maintenance-window and all three hashes
+FROM THAT RESTORE PREVIEW. Its replacement_sha256 describes the archived original,
+not the neutral replacement. It updates only post_content and verifies the whole
+row matches the original snapshot. Original backups remain after restore.
+
+FAILURES AND LIMITATIONS
+
+A prepared record can survive interruption before or after a database commit.
+If a final state write fails or a network timeout occurs, the database operation
+may already have committed. Inspect the current row and private evidence before
+retrying. Do not assume any failed command implies no change. A prepared record
+can still be restored when its verified expected replacement state is present.
+The filesystem backup and database commit are not atomic together, and power-loss
+durability is not guaranteed. Locks here serialize this tool, not other PHP code.
+
+Use a separate db-quarantine-store; file quarantine IDs and this record format
+are incompatible. See DATABASE-INVENTORY.txt for the offline database inventory.
+Automatic crash reconciliation is not implemented.
+
+Credentials are prompted, password hidden, passed through standard input, and
+not written into reports. Use a local database connection; remote database TLS
+setup is not provided. A 120-second timeout bounds the helper call; a timeout is
+an uncertain outcome requiring inspection. Original owner/group filesystem
+restrictions and private store permissions use the file utility's safety checks.

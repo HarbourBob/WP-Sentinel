@@ -1,0 +1,59 @@
+WORDPRESS SENTINEL — OPTIONAL STARTUP/PERSISTENCE INVENTORY
+
+Upload persistence.py with the updated sentinel.py. No WordPress code is loaded.
+
+From compat/wp-sentinel:
+python3 -I -S sentinel.py --root ../../public_html --output ../report-013 --max-file-mb 20 --persistence --account-cron
+
+This repeats file scanning and adds the inventory below. It does not repeat
+database, core, or plugin checksum checks unless their switches are also given.
+Use a fresh report directory on every run. Existing review notes remain separate.
+
+--persistence inventories top-level PHP entries in the default must-use plugins
+folder, conventional wp-content drop-in filenames, and inspected .user.ini,
+php.ini, and .htaccess files under the selected root. It flags non-comment
+auto_prepend_file, auto_append_file, extension, and zend_extension settings for
+review. Disabled-looking none/off/empty values are ignored. It is a text check,
+not a full PHP/Apache configuration parser or effective-runtime inspection.
+
+All identified startup files/settings are review observations. Hosting support,
+firewalls, caches, and ordinary site customization may legitimately use them.
+Do not quarantine them solely because they appear in this inventory.
+
+--account-cron also calls crontab -l for the current SSH account. This is a read
+operation. It does not run any listed job or edit the crontab. Each job is reported
+by line number and SHA-256; command text and environment assignment values are
+omitted to avoid exposing credentials or tokens. Inspect those locally when
+investigating. Other sites may share this account's jobs. Cron output is capped
+at 1 MiB and the listing command has a 15-second timeout. Temporary output streams
+are created and closed; there is no permanent raw cron log in the report.
+
+UNAVAILABLE IS NOT CLEAN
+
+Missing or restricted crontab access is explicitly reported. Jobs managed by the
+hosting panel can exist even when crontab -l returns no jobs or is unavailable.
+The check does not inventory WordPress's database cron hooks, system jobs, other
+users, shell startup files, running processes, or remote scheduled services.
+
+Files for the startup inspection must have been hashed by the main bounded file
+scan. They are reread up to 1 MiB and must still match that scan hash. Symlinks and
+changed/unreadable/oversized startup files are listed as unchecked. The mu-plugin
+top-level directory inventory is capped at 1000 entries. No includes are followed.
+Files under subdirectories may be loaded indirectly but are not automatically
+classified as direct startup files. wp-config.php is scanned for patterns but not parsed, so
+custom WP_CONTENT_DIR/WPMU_PLUGIN_DIR settings are not discovered.
+
+Parent directories, system PHP settings, actual web-server handlers, custom
+user-INI names, environment injection, and server-level persistence are outside
+scope. A setting in a file need not be effective for this host. Conversely, no
+setting found here does not prove PHP has no external startup configuration.
+
+Partial checks print PARTIAL and return exit status 3. Read the JSON/HTML report
+to distinguish unavailable capabilities from suspicious observations.
+
+Afterward add the report to the historical summary with manage.py as before,
+using a new summary output directory. Review notes do not hide new rule types.
+
+Design references:
+https://developer.wordpress.org/advanced-administration/plugins/mu-plugins/
+https://www.php.net/manual/en/ini.core.php

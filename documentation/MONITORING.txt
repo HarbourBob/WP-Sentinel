@@ -1,0 +1,139 @@
+WORDPRESS SENTINEL 0.21.0-rc1 - SCHEDULED CHECKS AND ALERTS
+
+Run checks on a schedule and hear about them only when something is new. Sentinel
+never installs a schedule itself: you add it, as shown below, and you can remove it.
+Nothing here changes website files or database records.
+
+RECOMMENDED: RUN FROM YOUR OWN COMPUTER
+
+Evidence and alert settings stay where an attacker on the host cannot alter them.
+The catch is that your computer must be switched on at the scheduled time.
+
+1. Create alert settings, such as alerts.json on your computer. Use email, webhook
+or both. Keep this file private, because it holds a password or a secret address:
+
+  {
+    "format": "sentinel-alerts-1",
+    "site_name": "My site",
+    "email": {
+      "smtp_host": "smtp.example.com",
+      "port": 587,
+      "security": "starttls",
+      "username": "alerts@example.com",
+      "password": "your-smtp-password",
+      "from": "alerts@example.com",
+      "to": ["you@example.com"]
+    },
+    "webhook": {"url": "https://hooks.example.com/your-secret-address"}
+  }
+
+Webhooks suit Slack, Discord and similar services; https is required. Email security
+is starttls (usually port 587) or ssl (usually port 465).
+
+Optional settings:
+  min_priority           Lowest priority that alerts: high, medium, review (default)
+                         or info. Changes to site URLs and active plugins always alert.
+  alert_on_file_changes  true also alerts when any file was added, changed or removed.
+                         Off by default, because every plugin update would alert.
+                         File counts still appear in any alert that is sent.
+
+2. Check that alerts reach you:
+
+python sentinel-remote.py alert-test --alert-config alerts.json
+
+3. Run it once by hand. Your first run lists everything current as new:
+
+python sentinel-remote.py scan --host user@example.com --root /home/user/public_html --core --plugins --persistence --db-from-wp-config --unattended --alert-config alerts.json --prune-keep 30
+
+4. Schedule the same command, with full paths. On Windows, in Command Prompt:
+
+schtasks /Create /TN "WP Sentinel" /SC DAILY /ST 03:00 /TR "cmd /c cd /d C:\sentinel && python sentinel-remote.py scan --host user@example.com --root /home/user/public_html --core --plugins --persistence --db-from-wp-config --unattended --alert-config alerts.json --prune-keep 30"
+
+On Linux or macOS, in crontab -e:
+
+0 3 * * * cd /home/you/sentinel && python3 sentinel-remote.py scan --host user@example.com --root /home/user/public_html --core --plugins --persistence --db-from-wp-config --unattended --alert-config alerts.json --prune-keep 30
+
+To watch every install on the account with one schedule, use scan-all instead of
+scan (see ACCOUNT.txt).
+
+--unattended needs key-based SSH with no passphrase prompt (or a running agent), and a
+host key already accepted. Connect once by hand first. Otherwise the run fails, and
+says so, rather than waiting for an answer.
+
+Overlapping runs for one site are refused. A lock left by a crash expires after 12
+hours, and until then runs fail with an alert that names the lock file.
+
+WHEN AN ALERT IS SENT
+
+- A finding is new, or its content changed, since the last delivered alert.
+- A check could not run this time and could the last time, such as the database.
+- A scheduled run failed. Repeated at most every 24 hours while it continues, then a
+  message when checks are working again.
+
+A finding that disappears and later returns alerts again. A failed delivery is tried
+again on the next run, so a channel may occasionally repeat a message: a repeat is
+safer than a lost alert.
+
+The record of what you have been told is alert-state.json, beside the runs. Deleting
+it makes the next run list everything again.
+
+QUIET IS NOT CLEAN
+
+No alert means nothing new matched. It does not mean the site is clean. Malware that
+matches no rule stays quiet unless alert_on_file_changes or a checksum check catches
+it. If your computer is off or the schedule is removed, nothing runs and nothing tells
+you. Check the evidence folder now and then, or use a service that alerts when a
+scheduled job stops reporting.
+
+Exit codes are in RULES.txt. Exit 5 means an alert was due but could not be delivered.
+
+DATABASE CHECKS WITHOUT A PROMPT
+
+--db-from-wp-config reads the database settings from wp-config.php on the host. The
+file is read as text and never executed, commented-out lines are ignored, and the
+password stays on the host: it goes to PHP through standard input, as with a prompt,
+and is never saved or sent back.
+
+It stops and says why when it cannot be certain: values built with getenv() or joined
+strings, or several values for one setting, as in per-environment configs. The scan
+still finishes without database coverage, and an alert says so. In that case use
+--db-credentials with the path of a private JSON file on the host, outside every
+website, with permissions 600:
+
+  {"host": "localhost", "database": "name", "user": "user", "password": "secret", "prefix": "wp_"}
+
+A compromised wp-config.php could point the check at a different database, which
+would look clean. Treat a surprising drop in database findings as worth checking.
+
+REMOVING OLD RUNS
+
+Preview, then remove. Removal is permanent. Back up anything you may need first.
+
+python sentinel-remote.py prune --keep 30
+python sentinel-remote.py prune --keep 30 --apply
+
+The first run and the newest 30 are kept for each site. The first is kept as the
+earliest evidence. chain.json records each removal, and "verify" still checks all the
+remaining runs. A removed run can no longer be checked. --prune-keep does the same
+after each successful scan. Nothing is ever removed unless you ask.
+
+RUNNING ON THE HOST INSTEAD
+
+If your computer cannot run a schedule, use cron on the host:
+
+0 3 * * * cd /home/user/compat/wp-sentinel && flock -n ../sentinel.lock python3 -I -S sentinelctl.py --profile ../site.json routine-check --core --plugins --persistence --db-from-wp-config --alert-config ../alerts.json --prune-keep 30
+
+Test first with "alert-test --alert-config ../alerts.json", and preview cleanup with
+"prune --keep 30". Keep alerts.json outside every website, with permissions 600.
+
+This is weaker. An attacker on the account can read your SMTP password, alter the
+record of alerts, remove the cron line or change the program. Use a dedicated mailbox
+password. flock is not on every host, and without it runs may overlap. Hosted cleanup
+keeps the first and newest folders of each kind, and never touches quarantine stores
+or review notes.
+
+TESTING STATUS
+
+Tested on Windows with stand-ins: a local mail server, a local webhook, a stand-in for
+ssh and a stand-in database. Not yet tested with a real mail provider, webhook service
+or schedule, or against a real database. Run alert-test, then one run by hand, first.

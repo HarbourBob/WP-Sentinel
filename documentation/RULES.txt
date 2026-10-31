@@ -1,0 +1,90 @@
+WORDPRESS SENTINEL 0.21.0-rc1 — RULES AND HOW TO READ FINDINGS
+
+PRIORITIES
+
+  high    Inspect first. Strong sign of malicious code, or code that should not
+          be where it is.
+  medium  Inspect soon. Suspicious, with some legitimate uses.
+  review  Check it is expected. An observation, not a sign of malware.
+  info    Recorded so a change between scans stands out.
+
+Findings are starting points, not verdicts. A legitimate plugin can trigger a rule,
+and malware can avoid every rule. No findings does not mean the site is clean.
+
+WHAT IS CHECKED
+
+File contents, using patterns from rules.json: execution of decoded or request
+input, obfuscated function names, droppers and includes driven by the request, and
+suspicious .htaccess handlers and redirects.
+
+File locations, built into sentinel.py: executable files in uploads, unknown PHP in
+the site root or directly in wp-content, double extensions, hidden PHP, stray
+wp-config.php or .env files, and symlinks leaving the site.
+
+Integrity, when requested: --core, --plugins and --reference compare files with
+official or supplied copies. This is the strongest check where it is available.
+Rules matter most for themes and custom code with no reference copy.
+
+Database, when requested: stored scripts and PHP, hidden iframes and links, encoded
+execution, admin accounts, site URLs, active plugins, cron hooks, triggers, events
+and routines. An active plugin path pointing outside the plugins folder is high.
+
+MEASURED SO FAR
+
+False alarms: on 30 October 2026, file rules were run over the latest WordPress and 18
+popular plugins (33,694 files). 6 files were flagged (0.018%): 0 high, 4 medium,
+2 review. Each is explainable, such as a real eval in an older library. The rules
+were tuned against this same set, so expect somewhat more on other plugins and themes,
+and on custom code. Repeat this with tests/measure_clean_corpus.py.
+
+Detection: tested on small written samples only. The rules have not been measured
+against a real malware collection, so how much real malware they catch is not known.
+Database rules have not been measured against a real database.
+
+SECRETS
+
+wp-config.php and .env files are read into memory like any other file. Only rule
+names, line numbers and hashes are recorded. A hash of a secrets file changes when
+the file changes; it does not reveal the contents. Database values are never saved,
+but finding context does include short non-secret fields, such as option names, meta
+keys and administrators' login names. Keep reports private.
+
+EXIT CODES
+
+  0   Scan completed. This does not mean the site is clean.
+  2   Stopped before or during the scan.
+  3   Completed with gaps; read the coverage section.
+  4   --fail-on matched: a finding reached that priority. Gaps may also exist.
+  5   An alert was due but could not be delivered. The scan itself finished.
+
+CHANGING THE RULES
+
+rules.json holds "file_rules" (Python regular expressions) and "database_rules"
+(PHP PCRE patterns), and is only ever read as data. Macros such as {gap} and
+{request} are expanded before compiling. Each file rule has:
+
+  id            Stable name. Review notes match on it, so changing an id means
+                earlier reviews no longer apply.
+  severity      high, medium, review or info.
+  applies_to    Any of php, js, htaccess.
+  all           Patterns that must all match the same file.
+  reason        Shown in the report.
+  literals      Optional, lower case: the rule is skipped unless the file contains one
+                of these. Far faster than running the pattern, but a wrong list makes
+                the rule miss things, so list only text every match must contain.
+  flags         Optional: "im" adds multi-line matching. Matching ignores case.
+  scope         Optional: "normalized" matches only after joining string pieces and
+                decoding escapes, and only if the raw text does not match.
+  only_paths, exclude_paths   Optional path prefixes.
+
+Avoid patterns with nested repetition: a slow pattern can stall a scan. Use --rules
+to try a different pack. The report records which rule version produced it. Rule
+tests are in tests/rule_cases.py, in the development copy only.
+
+ANTIVIRUS NOTE
+
+Security software can flag files containing malware patterns. rules.json holds only
+patterns, but a host's scanner could still object to it. Do not disable protection
+to work around this; ask your host, or use sentinel-remote.py, which removes the
+program from the host after each run. Samples in the tests are kept in a split form
+because Windows Defender blocks them as plain text.

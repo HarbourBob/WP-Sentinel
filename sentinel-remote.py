@@ -56,9 +56,13 @@ class Host:
     """Runs argument lists on the host through ssh. Host-key checking stays at ssh's own settings."""
     def __init__(self, args):
         self.ssh = shlex.split(args.ssh_command) + (['-p', str(args.port)] if args.port else []) + (['-i', str(args.identity)] if args.identity else [])
+        # Fail rather than wait on a port that is not answering as SSH, such as FTP on 21.
+        # Not on Windows: its ssh sits out the whole timeout on every connection, and hosts may drop it.
+        if os.name != 'nt':
+            self.ssh += ['-o', 'ConnectTimeout=30']
         if args.unattended:
             # Fail rather than wait forever for a passphrase or host-key answer nobody will give.
-            self.ssh += ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30']
+            self.ssh += ['-o', 'BatchMode=yes']
         self.target = args.host
         self.python = args.remote_python
 
@@ -69,7 +73,10 @@ class Host:
         return [self.python, '-I', '-S', '-c', code, *values]
 
     def capture(self, argv, payload=None):
-        result = subprocess.run(self.command(argv), input=payload, capture_output=True, timeout=600)
+        try:
+            result = subprocess.run(self.command(argv), input=payload, capture_output=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('SSH did not finish within 10 minutes. Check --port (many hosts do not use 22; FTP is usually 21). See "IF IT WILL NOT CONNECT" in REMOTE.txt.') from None
         if result.returncode == 255:
             # ssh's own failure. Its reason is what the user needs, once made safe to print.
             lines = [CONTROL_TEXT.sub('?', line.strip())[:200] for line in result.stderr.decode('utf-8', 'replace').splitlines() if line.strip()]

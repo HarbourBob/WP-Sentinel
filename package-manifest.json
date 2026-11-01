@@ -124,8 +124,8 @@
       "sha256": "976ac0cd2beca32ab559fd23846c466ab7d0caa4088a8d1e7deb8a3f0484dc01"
     },
     "sentinel-remote.py": {
-      "bytes": 44009,
-      "sha256": "7b93b2e208b4a7e837f29535b2f715451dad7dadaaf5139c985bad70062a2cc4"
+      "bytes": 44503,
+      "sha256": "93f2b365742bbce153470c523261aad32f5b44643ed347b865d96b1b467aba7f"
     },
     "sentinel.py": {
       "bytes": 71277,

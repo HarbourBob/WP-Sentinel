@@ -52,7 +52,7 @@ def critical(location, rules):
     return location.startswith(('wp-admin/', 'wp-includes/')) and 'unexpected-core-file' not in rules
 
 def plain_name(location):
-    if re.search(r'[\x00-\x1f\x7f]', location) or location != location.strip():
+    if re.search(r'[\x00-\x1f\x7f]', location) or location != location.strip() or len(location.splitlines()) != 1:
         return False
     try:
         location.encode('utf-8')
@@ -102,7 +102,7 @@ def make_plan(report_path, root, reviews_dir, output, priority='high', rules=(),
             skip('no complete file hash, or the file was missing or too large', location)
             continue
         if critical(location, names) and not include_critical:
-            skip('WordPress needs this file: review it yourself, or use --include-critical', location)
+            skip('WordPress needs this file: swap in a clean copy with replace-plan, or use --include-critical', location)
             continue
         best = next(level for level in PRIORITIES if any(item['severity'] == level for item in selected))
         entries.append((hashes.pop(), best, ','.join(sorted(str(item.get('rule', '')) for item in selected)), location))

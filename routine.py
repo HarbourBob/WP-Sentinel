@@ -130,8 +130,8 @@ def run(args, profile, build, validate):
     result = {'format': 'sentinel-routine-1', 'site_root': str(root), 'status': 'incomplete',
               'report': str(report_dir / 'report.json'), 'inventory': str(report_dir / 'file-inventory.json'),
               'before_inventory': str(before) if before else None, 'warnings': warnings,
-              'optional_checks_requested': [name for name in ('core', 'database', 'plugins', 'persistence', 'account_cron') if getattr(args, name, False) or (name == 'database' and (args.db_from_wp_config or args.db_credentials))],
-              'optional_checks_not_requested': [name for name in ('core', 'database', 'plugins', 'persistence', 'account_cron') if not getattr(args, name, False) and not (name == 'database' and (args.db_from_wp_config or args.db_credentials))],
+              'optional_checks_requested': [name for name in ('core', 'database', 'plugins', 'themes', 'persistence', 'account_cron') if getattr(args, name, False) or (name == 'database' and (args.db_from_wp_config or args.db_credentials))],
+              'optional_checks_not_requested': [name for name in ('core', 'database', 'plugins', 'themes', 'persistence', 'account_cron') if not getattr(args, name, False) and not (name == 'database' and (args.db_from_wp_config or args.db_credentials))],
               'note': 'Manual read-only checks of website content. Private evidence files are written; no baseline, review, website file or database record is replaced. Completion is not a clean-site verdict.'}
     def execute(cmd):
         try:

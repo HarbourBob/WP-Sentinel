@@ -2,8 +2,8 @@ WORDPRESS SENTINEL — EXPERIMENTAL POST/PAGE CONTENT PRESERVATION
 
 This is a narrow, explicit replacement tool, not automatic database cleaning.
 The PHP helper is new and still needs hosting validation on a disposable draft.
-Local tests cover argument guards and PHP syntax, not this helper's live database
-transactions. The earlier synthetic self-test does not substitute for this test.
+Local tests covered argument guards and PHP syntax, not this helper's live database
+transactions.
 
 SUPPORTED SCOPE
 

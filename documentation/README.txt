@@ -1,4 +1,14 @@
-WORDPRESS SENTINEL 0.21.0-rc1
+WORDPRESS SENTINEL 0.23.0-rc1
+
+BACK UP YOUR SITE FIRST, IF AT ALL POSSIBLE. Keep the backup away from the website.
+
+STATUS: NEW AND LARGELY UNTESTED, WITH NO GUARANTEES
+
+This is new software, offered for testing under the MIT licence, with no warranty. It
+may not work on your host, it may miss malware, and it may flag innocent files. It
+has been run on one real site. How much real malware the rules catch has not been
+measured. Try it on a staging copy before relying on it. Improvements and forks are
+welcome.
 
 Sentinel scans a WordPress site and its database for signs of compromise over
 SSH, and can move reviewed files into a private quarantine. It uses only the
@@ -22,14 +32,31 @@ WHERE TO START
   RULES.txt               What the scanner looks for and how to read findings.
   QUARANTINE.txt          Move reviewed files aside, and restore them.
   BATCH-QUARANTINE.txt    Move hundreds of reviewed files from one checked plan, and undo it.
+  CLEAN-REPLACEMENT.txt   Swap changed core, plugin and theme files for clean copies, and undo it.
   MANAGEMENT.txt          Report history, review notes and inventories.
   FILE-INVENTORY.txt      Compare file hashes between scans.
   PERSISTENCE.txt         Startup files and account crontab.
   DATABASE-CONTENT.txt    Replace one post's content, with a guarded restore.
   DATABASE-INVENTORY.txt  Offline check of database backups.
   DATABASE-VERIFY.txt     Check a recorded database operation against live data.
-  DATABASE-TEST.txt       Disposable database workflow test.
   PACKAGE-CHECK.txt       Confirm an upload matches the release.
+
+WHAT IS NEW IN 0.23
+
+- A flagged file that matches its official copy now drops to info, marked "Verified
+  official", when --core, --plugins or --themes runs.
+- The rule for remote includes no longer fires on plain text in comments.
+- MIT licence added. Self-test commands, which relied on programs not in this package,
+  have been removed.
+
+WHAT IS NEW IN 0.22
+
+- replace-plan fetches verified clean copies of core, plugin and theme files named in a
+  report. replace-apply swaps them in after backing up the originals, and replace-undo
+  puts the originals back.
+- --themes compares themes with their WordPress.org copies when scanning. It also works
+  with sentinel-remote.py.
+- Files named with unusual line separators no longer break a batch plan.
 
 WHAT IS NEW IN 0.21
 

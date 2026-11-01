@@ -1,8 +1,8 @@
-WORDPRESS SENTINEL 0.21.0-rc1 - PACKAGE VERIFICATION
+WORDPRESS SENTINEL 0.23.0-rc1 - PACKAGE VERIFICATION
 
 Upload the program files directly into compat/wp-sentinel, keeping the documentation
-folder beside them. Include package-manifest.json and verify-package.py. Do not
-upload the tests folder. Replace program files while no Sentinel operation is running.
+folder beside them. Include package-manifest.json and verify-package.py. The tools
+folder is not needed on a host. Replace program files while no Sentinel operation is running.
 Preserve your profiles and evidence folders. Use binary/unchanged transfer mode:
 line-ending conversion changes file hashes.
 
@@ -29,6 +29,6 @@ this checks upload consistency, not authenticity against a same-account attacker
 
 If you change a packaged file, rebuild the manifest on your own computer:
 
-python -B tests/build_manifest.py
+python -B tools/build_manifest.py
 
 No automatic update, scan, quarantine, deletion or scheduling is introduced.

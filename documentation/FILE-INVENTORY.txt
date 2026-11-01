@@ -13,9 +13,9 @@ exclusions, count and size limits, mocked permission failures, interrupted reads
 wrong-site/reversed input rejection and the command-line round trip. They do not
 read or change the real site. This is not a power-loss or hostile-race test.
 
-Create the first inventory using your existing saved-reference profile:
+Create the first inventory using your profile:
 
-python3 -I -S sentinelctl.py --profile ../site-references-12.json scan --file-inventory
+python3 -I -S sentinelctl.py --profile ../site.json scan --file-inventory
 
 Repeat the same command for a second inventory. Do not deliberately edit the
 live website to test this: disposable tests already cover those changes.
@@ -26,7 +26,7 @@ checks; it does not refresh database or startup checks.
 
 Compare two sequential inventories (replace EARLIER and LATER with actual names):
 
-python3 -I -S sentinelctl.py --profile ../site-references-12.json file-changes --before ../report-EARLIER/file-inventory.json --after ../report-LATER/file-inventory.json
+python3 -I -S sentinelctl.py --profile ../site.json file-changes --before ../report-EARLIER/file-inventory.json --after ../report-LATER/file-inventory.json
 
 A new file-changes-* folder receives file-changes.json and file-changes.html.
 The comparison is offline and does not connect to the website or database.

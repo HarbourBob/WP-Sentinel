@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WordPress Sentinel 0.21.0-rc1: one entry point, explicit operations."""
+"""WordPress Sentinel 0.23.0-rc1: one entry point, explicit operations."""
 import argparse
 import datetime
 import importlib.util
@@ -98,7 +98,7 @@ def parser():
         c.add_argument('--db-value-limit', type=int)
         c.add_argument('--php')
         c.add_argument('--fail-on', choices=['high', 'medium', 'review', 'info'])
-        for flag in ['database', 'plugins', 'persistence', 'account-cron', 'core']:
+        for flag in ['database', 'plugins', 'themes', 'persistence', 'account-cron', 'core']:
             c.add_argument('--' + flag, action='store_true')
         c.add_argument('--db-from-wp-config', action='store_true', help='Check the database without prompting, reading its details from wp-config.php as text')
         c.add_argument('--db-credentials', type=Path, help='Check the database without prompting, using this private JSON file')
@@ -115,9 +115,6 @@ def parser():
     sub.add_parser('summary')
     sub.add_parser('inventory')
     sub.add_parser('db-inventory')
-    sub.add_parser('selftest')
-    c = sub.add_parser('db-selftest', allow_abbrev=False)
-    c.add_argument('--allow-test-table', action='store_true', required=True)
     for name in ['file-quarantine', 'file-restore', 'db-replace', 'db-restore', 'db-verify']:
         c = sub.add_parser(name, allow_abbrev=False)
         if name == 'file-quarantine':
@@ -152,6 +149,22 @@ def parser():
             c.add_argument('--skip-problems', action='store_true', help='Leave files that differ from the plan where they are, and move the rest')
         else:
             c.add_argument('--only', action='append', default=[], help='Restore only this file; repeatable')
+    c = sub.add_parser('replace-plan', allow_abbrev=False, help='Fetch verified clean copies for a report, and list what would be replaced. Changes nothing on the site.')
+    c.add_argument('--report', type=Path, required=True)
+    c.add_argument('--rule', action='append', default=[], help='Only this rule; repeatable')
+    c.add_argument('--path', action='append', default=[], help='Only this file or folder, relative to the site; repeatable')
+    c.add_argument('--reference', action='append', default=[], help='Your own trusted copy: plugin:folder=/path/file.zip or theme:folder=/path/file.zip')
+    c.add_argument('--no-saved-references', action='store_true')
+    for name in ['replace-apply', 'replace-undo']:
+        c = sub.add_parser(name, allow_abbrev=False)
+        c.add_argument('--plan', type=Path, required=True)
+        c.add_argument('--apply', action='store_true')
+        c.add_argument('--plan-sha256')
+        if name == 'replace-apply':
+            c.add_argument('--limit', type=int, help='Replace at most this many files now; run again for the rest')
+            c.add_argument('--skip-problems', action='store_true', help='Leave files that differ from the plan alone, and replace the rest')
+        else:
+            c.add_argument('--only', action='append', default=[], help='Undo only this file; repeatable')
     c = sub.add_parser('review', allow_abbrev=False)
     c.add_argument('--report', type=Path, required=True)
     c.add_argument('--finding-index', type=int, required=True)
@@ -173,7 +186,7 @@ def command(args, profile):
             if not profile['core_version']:
                 raise ValueError('Profile has no core version. Create a new profile with a reviewed version, or --core-version auto.')
             tail += ['--core-version', profile['core_version'], '--locale', profile['locale']]
-        for flag in ['database', 'db-from-wp-config', 'plugins', 'persistence', 'account-cron']:
+        for flag in ['database', 'db-from-wp-config', 'plugins', 'themes', 'persistence', 'account-cron']:
             if getattr(args, flag.replace('-', '_')):
                 tail.append('--' + flag)
         for flag in ['db-credentials', 'max-files', 'db-row-limit', 'db-value-limit', 'php', 'fail-on']:
@@ -237,11 +250,32 @@ def command(args, profile):
             tail += ['--limit', str(args.limit)]
         for item in getattr(args, 'only', []):
             tail += ['--only', item]
-    elif name in ['selftest', 'db-selftest']:
-        script = name + '.py'
-        tail = ['--work-dir', str(private)]
-        if name == 'db-selftest':
-            tail += ['--allow-test-table']
+    elif name == 'replace-plan':
+        script = 'replace.py'
+        tail = ['plan'] + common + ['--report', str(args.report), '--reviews', str(private / 'review-notes'), '--output', str(private / ('replace-' + stamp)), '--locale', profile['locale']]
+        if profile['core_version'] not in ('', 'auto'):
+            tail += ['--core-version', profile['core_version']]
+        for item in args.rule:
+            tail += ['--rule', item]
+        for item in args.path:
+            tail += ['--path', item]
+        for reference in ([] if args.no_saved_references else list(profile.get('references', []))) + args.reference:
+            target, path = reference_parts(reference, root)
+            if not Path(path).is_file():
+                raise ValueError('Reference ZIP is missing: ' + path)
+            tail += ['--reference', target + '=' + path]
+    elif name in ['replace-apply', 'replace-undo']:
+        script = 'replace.py'
+        tail = [name.split('-')[1]] + common + ['--store', str(private / 'quarantine-store'), '--plan', str(args.plan)]
+        if args.plan_sha256:
+            tail += ['--plan-sha256', args.plan_sha256]
+        for flag in ['apply', 'skip_problems']:
+            if getattr(args, flag, False):
+                tail.append('--' + flag.replace('_', '-'))
+        if getattr(args, 'limit', None) is not None:
+            tail += ['--limit', str(args.limit)]
+        for item in getattr(args, 'only', []):
+            tail += ['--only', item]
     else:
         database = name.startswith('db-')
         script = 'db-content.py' if database else 'quarantine.py'
@@ -253,8 +287,6 @@ def command(args, profile):
         for key in ['apply', 'maintenance_window']:
             if getattr(args, key, False):
                 tail.append('--' + key.replace('_', '-'))
-    if name in ('selftest', 'db-selftest') and not (HERE / script).is_file():
-        raise ValueError('Self-tests are not included in the hosting package. Use the development package locally; do not upload test fixtures to hosting.')
     return [sys.executable, '-B', '-I', '-S', str(HERE / script)] + tail
 
 def main(argv=None):

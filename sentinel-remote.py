@@ -274,7 +274,7 @@ def remote_scan_arguments(args, run_path, references):
             '--file-inventory', '--max-file-mb', str(args.max_file_mb)]
     if args.core:
         tail += ['--core-version', args.core_version, '--locale', args.locale]
-    for flag in ('database', 'db_from_wp_config', 'plugins', 'persistence', 'account_cron'):
+    for flag in ('database', 'db_from_wp_config', 'plugins', 'themes', 'persistence', 'account_cron'):
         if getattr(args, flag):
             tail.append('--' + flag.replace('_', '-'))
     for flag in ('db_credentials', 'max_files', 'db_row_limit', 'db_value_limit', 'php', 'fail_on'):
@@ -666,7 +666,7 @@ def parser():
         c.add_argument('--remote-temp', default='~', help='Host folder for the temporary run folder. Must be outside every website.')
         c.add_argument('--core', action='store_true')
         c.add_argument('--locale', default='en_US')
-        for flag in ('plugins', 'persistence', 'account-cron'):
+        for flag in ('plugins', 'themes', 'persistence', 'account-cron'):
             c.add_argument('--' + flag, action='store_true')
         c.add_argument('--db-from-wp-config', action='store_true', help='Check the database without prompting, reading its details from wp-config.php on the host as text')
         c.add_argument('--alert-config', type=Path, help='Alert settings on this computer: tell you about new or changed findings and failures')

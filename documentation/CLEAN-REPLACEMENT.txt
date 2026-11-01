@@ -1,0 +1,127 @@
+WORDPRESS SENTINEL 0.23.0-rc1 - CLEAN REPLACEMENT
+
+Swap reported core, plugin and theme files for clean copies, and swap them back if
+you need to. This is for files the site needs. Quarantine (BATCH-QUARANTINE.txt) is
+for files that should not be there at all.
+
+Each original is backed up in the quarantine store and verified first. The clean
+copy then goes in with an atomic swap, so the site never sees a missing or half
+written file. Replacing files does not clear caches, end sessions, fix the hole
+the attacker used or remove backdoors elsewhere.
+
+Try this on a staging copy first. The downloads have been tried against the real
+WordPress.org, but only on a throwaway test site, not on a live one.
+
+THE THREE STEPS
+
+Run these on the host, from compat/wp-sentinel. ../site.json is your profile (INSTALL.txt
+shows how to create it). To find your newest report folder: ls -td ../report-*/ | head -1
+The DATE-TIME-ID folder names below are examples: use the ones your commands print.
+
+1. Scan with the checks that find changed files.
+
+   python3 -I -S sentinelctl.py --profile ../site.json scan --core --plugins --themes
+
+   --themes is new. It compares each theme with its WordPress.org copy.
+
+2. Make the plan. This downloads and checks clean copies, but does not touch the site.
+
+   python3 -I -S sentinelctl.py --profile ../site.json replace-plan --report ../report-DATE-TIME-ID/report.json
+
+   This writes a new replace-... folder in your private folder, holding plan.txt,
+   skipped.txt and the clean copies. Every file finding in the report is considered.
+
+   Read the "source" lines at the top of plan.txt. Are these the releases you expect?
+   The versions come from the site's own files, which an attacker can edit. If an
+   old WordPress version is shown on a site you know is newer, stop.
+
+   To spare a file, delete its line or start the line with #. Do this for any file
+   you edited on purpose, because a clean copy overwrites local edits.
+
+3. Preview, then apply. Applying changes the website.
+
+   python3 -I -S sentinelctl.py --profile ../site.json replace-apply --plan ../replace-DATE-TIME-ID/plan.txt
+
+   python3 -I -S sentinelctl.py --profile ../site.json replace-apply --plan ../replace-DATE-TIME-ID/plan.txt --apply --plan-sha256 HASH_FROM_THE_PREVIEW
+
+   Check the site straight away, then scan again.
+
+Also useful: --path FOLDER and --rule NAME narrow the plan, --limit 50 goes in stages,
+and --skip-problems leaves files that differ from the plan where they are.
+
+WHERE THE CLEAN COPIES COME FROM, AND HOW FAR TO TRUST THEM
+
+Core        Downloaded from downloads.wordpress.org. Each file must match the official
+            checksums from api.wordpress.org, or it is refused.
+Plugins     Downloaded from downloads.wordpress.org for the version in the plugin's
+            header. Each file must match the published checksums, which come from
+            the same site, so this is a weaker check than for core.
+Themes      Downloaded from downloads.wordpress.org for the version in style.css.
+            WordPress.org publishes no theme checksums, so this rests on the HTTPS
+            download alone.
+Your ZIPs   For premium or custom plugins and themes. Saved references in your profile
+            are used, or add --reference plugin:folder=/path/file.zip. Sentinel cannot
+            vouch for these. They must really be the right release.
+
+Your own ZIP is used in preference to WordPress.org for that plugin or theme.
+
+A premium plugin or theme could share a folder name with something else on
+WordPress.org. If a plan shows a source you do not recognise, remove those lines.
+
+WHAT IS LEFT OUT, AND LISTED IN skipped.txt
+
+- Files already identical to the clean copy. The finding was a false alarm, or the
+  file has already been fixed.
+- Files that are not in the official copy, such as planted files. Use batch-plan.
+- Files with no official copy, such as anything in wp-content/uploads. Use batch-plan.
+- wp-config.php and .htaccess, which are unique to your site. Clean these by hand.
+- Files you reviewed as benign, as long as their content has not changed since.
+- Files that changed since the scan. Find out why, and rescan.
+- Plugins and themes with no copy available, with advice on adding your own ZIP.
+- readme.html, license.txt and wp-config-sample.php when missing, because people
+  often remove them on purpose.
+- Database findings. This only handles files.
+
+Core files in wp-content are never replaced by the core copy. Bundled themes and
+plugins there have their own versions.
+
+A file reported as missing is put back, with any missing folders. Files already
+present at that path are never overwritten.
+
+WHEN SOMETHING GOES WRONG
+
+A file that differs from the plan stops the whole batch before anything is changed.
+So does a clean copy that has been altered since the plan was made. A file failing
+during the run leaves the original in place, and the run stops after 5 failures in a
+row. If a run is interrupted, run the same command again and it carries on.
+
+Every change is recorded in receipt.jsonl beside the plan. Keep that folder, as the
+undo needs it. Old report cleanup does not remove it.
+
+Exit codes: 0 finished (or a --limit stage finished), 2 stopped with an error,
+3 some files were not changed, or the batch stopped on a problem.
+
+UNDOING IT
+
+  python3 -I -S sentinelctl.py --profile ../site.json replace-undo --plan ../replace-DATE-TIME-ID/plan.txt
+
+This previews and prints the hash. Add --apply --plan-sha256 HASH_FROM_THE_PREVIEW to go ahead, and
+--only PATH, repeatable, to undo just the files you need.
+
+Undoing brings back the original files, including any malware among them. A file that
+has changed since it was replaced is left alone rather than overwritten, for example
+if WordPress has updated it since. Files that were put back are removed again.
+
+IF YOU SCAN FROM YOUR OWN COMPUTER
+
+sentinel-remote.py accepts --themes too. Replacement has to run on the host, so copy
+report.json up first, outside the website, as BATCH-QUARANTINE.txt describes.
+
+The host needs to be able to reach api.wordpress.org and downloads.wordpress.org.
+
+LIMITS
+
+Up to 5000 files in one plan, each up to 50 MiB, from ZIPs up to 200 MiB. Symlinks,
+hard links, files with special permissions and files owned by another user are
+refused. Core copies use the locale in your profile. Translation files in
+wp-content/languages have no official copy here.

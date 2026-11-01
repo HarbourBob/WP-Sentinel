@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.21.0-rc1 — RULES AND HOW TO READ FINDINGS
+WORDPRESS SENTINEL 0.23.0-rc1 — RULES AND HOW TO READ FINDINGS
 
 PRIORITIES
 
@@ -11,6 +11,16 @@ PRIORITIES
 Findings are starting points, not verdicts. A legitimate plugin can trigger a rule,
 and malware can avoid every rule. No findings does not mean the site is clean.
 
+VERIFIED OFFICIAL
+
+When --core, --plugins or --themes shows that a flagged file is identical to the
+official WordPress.org copy, the finding drops to info and its reason starts "Verified
+official". It stays in the report, with its original priority recorded. This needs
+those checks to run: on a scan without them, the same file keeps its normal priority.
+Your own --reference ZIPs do not count. Theme copies rest on the HTTPS download alone,
+because WordPress.org publishes no theme checksums. Official does not mean safe to
+keep: an out-of-date plugin can match its official copy and still be vulnerable.
+
 WHAT IS CHECKED
 
 File contents, using patterns from rules.json: execution of decoded or request
@@ -21,9 +31,10 @@ File locations, built into sentinel.py: executable files in uploads, unknown PHP
 the site root or directly in wp-content, double extensions, hidden PHP, stray
 wp-config.php or .env files, and symlinks leaving the site.
 
-Integrity, when requested: --core, --plugins and --reference compare files with
-official or supplied copies. This is the strongest check where it is available.
-Rules matter most for themes and custom code with no reference copy.
+Integrity, when requested: --core, --plugins, --themes and --reference compare files
+with official or supplied copies. This is the strongest check where it is available.
+Rules matter most for premium themes and custom code with no reference copy.
+CLEAN-REPLACEMENT.txt shows how to swap changed files for clean copies.
 
 Database, when requested: stored scripts and PHP, hidden iframes and links, encoded
 execution, admin accounts, site URLs, active plugins, cron hooks, triggers, events
@@ -35,7 +46,7 @@ False alarms: on 30 October 2026, file rules were run over the latest WordPress 
 popular plugins (33,694 files). 6 files were flagged (0.018%): 0 high, 4 medium,
 2 review. Each is explainable, such as a real eval in an older library. The rules
 were tuned against this same set, so expect somewhat more on other plugins and themes,
-and on custom code. Repeat this with tests/measure_clean_corpus.py.
+and on custom code.
 
 Detection: tested on small written samples only. The rules have not been measured
 against a real malware collection, so how much real malware they catch is not known.
@@ -78,13 +89,12 @@ rules.json holds "file_rules" (Python regular expressions) and "database_rules"
   only_paths, exclude_paths   Optional path prefixes.
 
 Avoid patterns with nested repetition: a slow pattern can stall a scan. Use --rules
-to try a different pack. The report records which rule version produced it. Rule
-tests are in tests/rule_cases.py, in the development copy only.
+to try a different pack. The report records which rule version produced it.
 
 ANTIVIRUS NOTE
 
 Security software can flag files containing malware patterns. rules.json holds only
 patterns, but a host's scanner could still object to it. Do not disable protection
 to work around this; ask your host, or use sentinel-remote.py, which removes the
-program from the host after each run. Samples in the tests are kept in a split form
-because Windows Defender blocks them as plain text.
+program from the host after each run. If you write test samples, keep them in a split
+form, because Windows Defender blocks some of them as plain text.

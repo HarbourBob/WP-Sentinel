@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.21.0-rc1 - BATCH QUARANTINE
+WORDPRESS SENTINEL 0.23.0-rc1 - BATCH QUARANTINE
 
 Move hundreds of reviewed files out of a site in one step, and put them back if
 you need to. You still make the decisions: Sentinel writes a list, you check it,
@@ -13,11 +13,13 @@ Try this on a staging copy first. It has been tested on fake sites only.
 
 THE THREE STEPS
 
-Run these on the host, from compat/wp-sentinel. Replace PROFILE with your profile.
+Run these on the host, from compat/wp-sentinel. ../site.json is your profile (INSTALL.txt
+shows how to create it). To find your newest report folder: ls -td ../report-*/ | head -1
+The DATE-TIME-ID folder names below are examples: use the ones your commands print.
 
 1. Make the plan. This changes nothing.
 
-   python3 -I -S sentinelctl.py --profile PROFILE batch-plan --report PATH/report.json
+   python3 -I -S sentinelctl.py --profile ../site.json batch-plan --report ../report-DATE-TIME-ID/report.json
 
    This writes a new batch-... folder in your private folder, holding plan.txt and
    skipped.txt, and prints how many files are in the plan, by folder.
@@ -27,7 +29,7 @@ Run these on the host, from compat/wp-sentinel. Replace PROFILE with your profil
    Read plan.txt. To spare a file, delete its line or start the line with #. Read
    skipped.txt too: those findings still need dealing with.
 
-   python3 -I -S sentinelctl.py --profile PROFILE batch-quarantine --plan PATH/plan.txt
+   python3 -I -S sentinelctl.py --profile ../site.json batch-quarantine --plan ../batch-DATE-TIME-ID/plan.txt
 
    The preview checks every file against the plan, lists any problems, and prints
    the plan's SHA-256. Editing the plan changes that hash, so preview again after
@@ -35,7 +37,7 @@ Run these on the host, from compat/wp-sentinel. Replace PROFILE with your profil
 
 3. Apply it. This changes the website.
 
-   python3 -I -S sentinelctl.py --profile PROFILE batch-quarantine --plan PATH/plan.txt --apply --plan-sha256 HASH
+   python3 -I -S sentinelctl.py --profile ../site.json batch-quarantine --plan ../batch-DATE-TIME-ID/plan.txt --apply --plan-sha256 HASH_FROM_THE_PREVIEW
 
    Check the site straight away, then run a new scan.
 
@@ -59,8 +61,9 @@ WHAT IS LEFT OUT, AND LISTED IN skipped.txt
 - Files WordPress needs: .htaccess, wp-config.php, index.php and the other standard
   files in the site root, anything in wp-admin or wp-includes, and any official
   file that fails its checksum. Removing these usually takes the site down. They
-  need replacing with a clean copy, not just removing. An extra file planted in
-  wp-admin or wp-includes is not protected, and can go in the plan.
+  need replacing with a clean copy, not just removing: see CLEAN-REPLACEMENT.txt.
+  An extra file planted in wp-admin or wp-includes is not protected, and can go in
+  the plan.
 - Paths outside the site, or names with tabs or control characters. Use
   file-quarantine for these.
 - Database findings. Quarantine only handles files.
@@ -98,9 +101,9 @@ Exit codes: 0 finished (or a --limit stage finished), 2 stopped with an error,
 
 UNDOING A BATCH
 
-  python3 -I -S sentinelctl.py --profile PROFILE batch-restore --plan PATH/plan.txt
+  python3 -I -S sentinelctl.py --profile ../site.json batch-restore --plan ../batch-DATE-TIME-ID/plan.txt
 
-This previews and prints the hash. Add --apply --plan-sha256 HASH to go ahead. Add
+This previews and prints the hash. Add --apply --plan-sha256 HASH_FROM_THE_PREVIEW to go ahead. Add
 --only wp-content/some/file.php, repeatable, to restore just the files you need,
 which is the usual case if the site breaks.
 
@@ -110,7 +113,7 @@ not overwrite a file that now exists at that path. Backups stay in the store.
 IF YOU SCAN FROM YOUR OWN COMPUTER
 
 Quarantine has to run on the host, and so the report has to be there too, outside
-the website. Copy it up from your computer first, for example:
+the website. Copy it up first, by running this on your own computer, not on the host:
 
   scp -P PORT -i KEYFILE report.json USER@HOST:private-folder/report.json
 

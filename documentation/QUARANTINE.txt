@@ -33,7 +33,7 @@ PREVIEW QUARANTINE - DOES NOT CREATE A STORE OR CHANGE THE SITE
 
 From compat/wp-sentinel:
 
-python3 -I -S quarantine.py quarantine --root ../../public_html --store ../quarantine-store --file wp-content/uploads/EXAMPLE.php
+python3 -I -S sentinelctl.py --profile ../site.json file-quarantine --file wp-content/uploads/EXAMPLE.php
 
 Replace the example relative path with an actual file already reviewed as
 malicious. The preview prints its SHA-256, size, and intended action. It does
@@ -53,7 +53,7 @@ SHA-256, and operation state are recorded. Access time is not restored.
 
 PREVIEW RESTORE
 
-python3 -I -S quarantine.py restore --root ../../public_html --store ../quarantine-store --id RETURNED_ID
+python3 -I -S sentinelctl.py --profile ../site.json file-restore --id RETURNED_ID
 
 APPLY RESTORE
 
@@ -90,18 +90,3 @@ support still need a staging test. This is a prototype, not a forensic product.
 Database quarantine/restore is NOT implemented. It needs record-specific handling
 and independent backups; no generic deletion or replacement of database rows is
 safe merely because a script marker was found.
-
-VERSION 0.5.1 — HOST SELF-TEST
-
-Upload selftest.py alongside quarantine.py. From compat/wp-sentinel run:
-  python3 -I -S selftest.py --work-dir ..
-
-The work directory must be private and outside public website directories.
-The self-test creates a uniquely named temporary folder there, builds a fake
-site with inert text fixtures, applies quarantine and restore to those fixtures,
-and cleans up its own temporary folder. It does not use your actual WordPress
-root or quarantine store. It tests Unix permissions and symlink rejection when
-supported, as well as unchanged bytes, modification time, overwrite protection,
-backup integrity, and operation records. Review skipped checks as well as status.
-A passed result does not prove security against a concurrent attacker or power
-loss. If interrupted, an isolated sentinel-selftest-* temporary folder may remain.

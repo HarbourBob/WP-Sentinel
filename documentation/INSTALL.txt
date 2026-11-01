@@ -1,16 +1,22 @@
-WORDPRESS SENTINEL 0.21.0-rc1 — INSTALLATION AND ROUTINE USE
+WORDPRESS SENTINEL 0.23.0-rc1 — INSTALLATION AND ROUTINE USE
+
+BACK UP YOUR SITE FIRST, IF AT ALL POSSIBLE. Keep the backup away from the website.
+This is new software with no guarantees. Scanning does not change your site, but
+quarantine and replacement do.
 
 To scan without installing anything on the host, see REMOTE.txt. The steps below
 install Sentinel on the host, which you need for quarantine and restore.
 
-Paths below are examples. "SITE" is the folder holding your site's public_html.
+"SITE" below means the folder holding your site's public_html. Commands assume you
+are in SITE/compat/wp-sentinel, so ../site.json is the profile and ../report-... is a
+report. Adjust ../../public_html if your site's web folder has another name.
 
 1. Upload and requirements
 
 Upload the package files directly into SITE/compat/wp-sentinel while no Sentinel
-operation is running, keeping the documentation folder. Do not upload the tests
-folder. Preserve the sibling reports, review-notes, references, quarantine-store
-and db-quarantine-store directories. Use binary transfer, then check the upload:
+operation is running, keeping the documentation folder. Preserve the sibling reports,
+review-notes, references, quarantine-store and db-quarantine-store directories. Use
+binary transfer, then check the upload:
 
 python3 -I -S verify-package.py
 
@@ -21,10 +27,15 @@ document roots and alternate domain mappings.
 
 2. Create the password-free profile once
 
-From SITE/compat/wp-sentinel:
+First find your WordPress language package:
 
-chmod 700 SITE/compat
-python3 -I -S sentinelctl.py --profile ../site.json init --root ../../public_html --private-dir .. --core-version auto --locale en_GB
+grep wp_local_package ../../public_html/wp-includes/version.php
+
+If it prints a locale such as en_GB, use that below. If it prints nothing, use en_US,
+even if your site displays in another language. Then, from SITE/compat/wp-sentinel:
+
+chmod 700 ..
+python3 -I -S sentinelctl.py --profile ../site.json init --root ../../public_html --private-dir .. --core-version auto --locale en_US
 python3 -I -S sentinelctl.py --profile ../site.json show
 
 The profile holds absolute paths, version and locale. Permissions are 600. Existing
@@ -38,12 +49,18 @@ Symlink paths and nonprivate folders are refused.
 
 3. Scan
 
-python3 -I -S sentinelctl.py --profile ../site.json scan --core --database --plugins --persistence --account-cron
+python3 -I -S sentinelctl.py --profile ../site.json scan --core --database --plugins --themes --persistence --account-cron
 
 Each run creates a NEW report-UTC-date-time-random directory under compat and prints
-its path. Without optional switches only the file scan runs. Database credentials are
-prompted every time and passed to PHP through stdin. Official checks fetch public
-checksums; they do not upload site content.
+its path. To find the newest one later:
+
+ls -td ../report-*/ | head -1
+
+Without optional switches only the file scan runs. Database credentials are prompted
+every time and passed to PHP through stdin. Official checks fetch public checksums and
+theme copies; they do not upload site content. Some hosts have no crontab command, so
+--account-cron makes the result "partial" there. Check scheduled jobs in your hosting
+panel as well.
 
 Useful limits: --max-file-mb (default 20), --max-files, --db-row-limit (default 10000
 per table) and --db-value-limit. Use --php if the php command is not the right one. On
@@ -75,10 +92,3 @@ For scheduled or scripted use, --fail-on high makes the command exit 4 when a hi
 priority finding exists. Exit code zero means completion, not a clean bill of health.
 For scheduled checks, alerts and old report cleanup, see MONITORING.txt. No automatic
 remediation or scheduled tasks are installed by this package.
-
-6. Self-tests
-
-The tests are in the development copy's tests folder and are not for upload to a
-host. Run them on your own computer:
-
-python -B -m unittest discover -s tests

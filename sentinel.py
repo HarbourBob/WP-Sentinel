@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import struct
 import sys
+import tempfile
 import zlib
 import zipfile
 import stat
@@ -21,7 +22,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
-VERSION = '0.21.0-rc1'
+VERSION = '0.23.0-rc1'
 SEVERITIES = ('high', 'medium', 'review', 'info')
 PHP_SUFFIXES = {'.php', '.phtml', '.php3', '.php4', '.php5', '.php7', '.php8', '.phar', '.pht', '.phtm', '.phps'}
 SCRIPT_SUFFIXES = {'.js', '.html', '.htm', '.svg'}
@@ -354,7 +355,7 @@ def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
                          limitations=list(limitations), skipped_counts=skipped)
     return findings, files, limitations, visited
 
-def check_core(root, hashes, version, locale):
+def core_manifest(version, locale):
     if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
         raise ValueError('Use an explicit stable WordPress version, such as 6.8.3.')
     if not re.fullmatch(r'[A-Za-z_]{2,20}', locale):
@@ -367,11 +368,40 @@ def check_core(root, hashes, version, locale):
     manifest = json.loads(body).get('checksums')
     if not isinstance(manifest, dict) or not manifest:
         raise ValueError('No official checksum manifest returned.')
-    results, unchecked = [], 0
     for name, digest in manifest.items():
         parts = name.split('/')
         if name.startswith('/') or '\\' in name or any(p in {'', '.', '..'} for p in parts) or not re.fullmatch('[a-fA-F0-9]{32}', str(digest)):
             raise ValueError('Invalid official manifest entry.')
+    return manifest
+
+def download(url, path, limit):
+    """Fetch over HTTPS into a new file. Certificates are checked by urllib's defaults."""
+    with urllib.request.urlopen(url, timeout=60) as response, open(path, 'xb') as stream:
+        if not response.geturl().startswith('https://'):
+            raise ValueError('Download left HTTPS.')
+        total = 0
+        while True:
+            chunk = response.read(65536)
+            if not chunk:
+                return
+            total += len(chunk)
+            if total > limit:
+                raise ValueError('Download is larger than expected.')
+            stream.write(chunk)
+
+def mark_verified(findings, verified):
+    """A file matching its official copy is not malware that was added, so stop ranking it as a risk."""
+    for finding in findings:
+        if finding.get('source') == 'file' and finding.get('location') in verified and finding.get('severity') in ('high', 'medium', 'review'):
+            finding.update(original_severity=finding['severity'], severity='info', verified_official=True,
+                           reason='Verified official: this file matches the official copy, so the match below is the original code, not an addition. ' + finding.get('reason', ''))
+
+def check_core(root, hashes, version, locale, verified=None):
+    verified = set() if verified is None else verified
+    manifest = core_manifest(version, locale)
+    results, unchecked = [], 0
+    for name, digest in manifest.items():
+        parts = name.split('/')
         if name.startswith('wp-content/'):
             continue
         target = root.joinpath(*parts)
@@ -381,6 +411,8 @@ def check_core(root, hashes, version, locale):
         if name in hashes:
             if hashes[name].lower() != digest.lower():
                 results.append(dict(source='file', location=name, severity='medium', rule='core-checksum-mismatch', reason='Differs from the selected official release. This is not proof of malware.', line=None))
+            else:
+                verified.add(name)
         elif not target.exists():
             results.append(dict(source='file', location=name, severity='medium', rule='core-file-missing', reason='Expected official core file is missing.', line=None))
         else:
@@ -411,7 +443,73 @@ def plugin_manifest(slug, version):
         validated[name] = tuple(item.lower() for item in digests)
     return validated
 
-def check_plugins(root, hashes):
+def plugin_version(directory):
+    """The version a plugin's header declares, or None if missing or ambiguous."""
+    headers = []
+    for path in sorted(directory.glob('*.php')):
+        if path.is_symlink() or not path.is_file():
+            continue
+        with path.open('rb') as stream:
+            text = stream.read(8192).decode('utf-8', errors='replace')
+        if re.search(r'^[ \t/*#]*Plugin Name\s*:', text, re.M | re.I):
+            version = re.search(r'^[ \t/*#]*Version\s*:\s*([^\s*]+)', text, re.M | re.I)
+            headers.append(version.group(1) if version else '')
+    return headers[0] if len(headers) == 1 and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,63}', headers[0]) else None
+
+def theme_version(directory):
+    """The version in a theme's style.css, or None."""
+    path = directory / 'style.css'
+    if path.is_symlink() or not path.is_file():
+        return None
+    with path.open('rb') as stream:
+        text = stream.read(8192).decode('utf-8', errors='replace')
+    version = re.search(r'^[ \t/*#]*Version\s*:\s*([^\s*]+)', text, re.M | re.I)
+    return version.group(1) if version and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,63}', version.group(1)) else None
+
+def public_zip_url(kind, slug, version):
+    return f'https://downloads.wordpress.org/{kind}/{slug}.{version}.zip'
+
+def check_themes(root, hashes, skip=(), verified=None):
+    """Compare themes with their WordPress.org ZIPs. Themes have no published checksums."""
+    base = root / 'wp-content' / 'themes'
+    findings, statuses = [], []
+    if base.is_symlink() or (root / 'wp-content').is_symlink() or not inside(base.resolve(), root) or not base.is_dir():
+        return [], [{'status': 'unverified', 'reason': 'Theme directory absent or symlinked'}]
+    with tempfile.TemporaryDirectory(prefix='sentinel-themes-') as temporary:
+        for directory in sorted(base.iterdir()):
+            slug = directory.name
+            if directory.is_file() and not directory.is_symlink():
+                continue
+            status = {'theme': slug, 'status': 'unverified'}
+            statuses.append(status)
+            if 'theme:' + slug in skip:
+                status.update(status='compared-to-user-supplied-reference')
+                continue
+            if directory.is_symlink() or not directory.is_dir() or not re.fullmatch('[a-z0-9][a-z0-9-]*', slug):
+                status['reason'] = 'Not an eligible ordinary theme directory'
+                continue
+            try:
+                version = theme_version(directory)
+                if not version:
+                    status['reason'] = 'Missing version in style.css'
+                    continue
+                status['version'] = version
+                archive = Path(temporary) / (slug + '.zip')
+                download(public_zip_url('theme', slug, version), archive, 100 * 1024 * 1024)
+                found, detail = check_reference(root, hashes, f'theme:{slug}={archive}', verified)
+                for finding in found:
+                    finding['reason'] = finding['reason'].replace('the supplied ZIP', 'the WordPress.org copy').replace('supplied reference ZIP', 'the WordPress.org copy').replace('supplied ZIP', 'the WordPress.org copy')
+                findings.extend(found)
+                status.update(status='compared', matched_files=detail['matched_files'], differences=detail['differences'], unchecked_details=detail['unchecked_details'])
+                archive.unlink()
+            except urllib.error.HTTPError as exc:
+                status['reason'] = f'No copy on WordPress.org (HTTP {exc.code}); custom, premium, child or unpublished themes need a trusted reference ZIP'
+            except Exception as exc:
+                status['reason'] = 'Could not verify: ' + type(exc).__name__
+    return findings, statuses
+
+def check_plugins(root, hashes, verified=None):
+    verified = set() if verified is None else verified
     base = root / 'wp-content' / 'plugins'
     findings, statuses = [], []
     if base.is_symlink() or (root / 'wp-content').is_symlink() or not inside(base.resolve(), root) or not base.is_dir():
@@ -425,21 +523,13 @@ def check_plugins(root, hashes):
         if directory.is_symlink() or not directory.is_dir() or not re.fullmatch('[a-z0-9][a-z0-9-]*', slug):
             status['reason'] = 'Not an eligible ordinary plugin directory'
             continue
-        headers = []
         try:
-            for path in sorted(directory.glob('*.php')):
-                if path.is_symlink() or not path.is_file():
-                    continue
-                with path.open('rb') as stream:
-                    text = stream.read(8192).decode('utf-8', errors='replace')
-                if re.search(r'^[ \t/*#]*Plugin Name\s*:', text, re.M | re.I):
-                    version = re.search(r'^[ \t/*#]*Version\s*:\s*([^\s*]+)', text, re.M | re.I)
-                    headers.append(version.group(1) if version else '')
-            if len(headers) != 1 or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,63}', headers[0]):
+            version = plugin_version(directory)
+            if not version:
                 status['reason'] = 'Missing or ambiguous plugin header/version'
                 continue
-            status['version'] = headers[0]
-            manifest = plugin_manifest(slug, headers[0])
+            status['version'] = version
+            manifest = plugin_manifest(slug, version)
             prefix = f'wp-content/plugins/{slug}/'
             local = {name[len(prefix):]: digest for name, digest in hashes.items() if name.startswith(prefix)}
             unchecked, matched, differences = 0, 0, 0
@@ -452,6 +542,7 @@ def check_plugins(root, hashes):
                 elif name in local:
                     if local[name] in digest:
                         matched += 1
+                        verified.add(prefix + name)
                     else:
                         differences += 1
                         findings.append(dict(source='file', location=prefix + name, severity='medium', rule='plugin-checksum-mismatch', reason='Differs from the WordPress.org reference for the locally declared version; review before changing.', line=None))
@@ -471,8 +562,34 @@ def check_plugins(root, hashes):
             status['reason'] = 'Could not verify: ' + type(exc).__name__
     return findings, statuses
 
-def check_reference(root, hashes, specification):
-    """Compare an explicitly supplied archive without extracting or executing it."""
+def safe_zip_files(z):
+    """The file entries of a reference ZIP, refusing anything unsafe. Nothing is extracted."""
+    entries = z.infolist()
+    if len(entries) > 50000 or sum(i.file_size for i in entries) > 1024 * 1024 * 1024:
+        raise ValueError('Reference exceeds entry or uncompressed-size limits')
+    files = []
+    packaging_metadata = []
+    for entry in entries:
+        name = entry.filename
+        parts = name.rstrip('/').split('/')
+        if name.startswith('/') or '\\' in name or ':' in name or any(p in {'', '.', '..'} for p in parts):
+            raise ValueError('Unsafe archive path')
+        if stat.S_ISLNK(entry.external_attr >> 16) or entry.flag_bits & 1:
+            raise ValueError('Symlink or encrypted archive entry is unsupported')
+        if parts[0] == '__MACOSX' or parts[-1] == '.DS_Store':
+            packaging_metadata.append(name)
+            continue
+        if not entry.is_dir():
+            if entry.file_size > 50 * 1024 * 1024:
+                raise ValueError('Archive member exceeds 50 MiB limit')
+            files.append(entry)
+    if not files:
+        raise ValueError('Empty reference archive')
+    return files, packaging_metadata
+
+def check_reference(root, hashes, specification, verified=None):
+    """Compare an explicitly supplied archive without extracting or executing it. Only pass verified for official archives."""
+    verified = set() if verified is None else verified
     identity, archive = specification.split('=', 1)
     kind, slug = identity.split(':', 1)
     if kind not in {'plugin', 'theme'} or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', slug):
@@ -486,27 +603,7 @@ def check_reference(root, hashes, specification):
     prefix = directory.relative_to(root).as_posix() + '/'
     expected = {}
     with zipfile.ZipFile(archive) as z:
-        entries = z.infolist()
-        if len(entries) > 50000 or sum(i.file_size for i in entries) > 1024 * 1024 * 1024:
-            raise ValueError('Reference exceeds entry or uncompressed-size limits')
-        files = []
-        packaging_metadata = []
-        for entry in entries:
-            name = entry.filename
-            parts = name.rstrip('/').split('/')
-            if name.startswith('/') or '\\' in name or ':' in name or any(p in {'', '.', '..'} for p in parts):
-                raise ValueError('Unsafe archive path')
-            if stat.S_ISLNK(entry.external_attr >> 16) or entry.flag_bits & 1:
-                raise ValueError('Symlink or encrypted archive entry is unsupported')
-            if parts[0] == '__MACOSX' or parts[-1] == '.DS_Store':
-                packaging_metadata.append(name)
-                continue
-            if not entry.is_dir():
-                if entry.file_size > 50 * 1024 * 1024:
-                    raise ValueError('Archive member exceeds 50 MiB limit')
-                files.append(entry)
-        if not files:
-            raise ValueError('Empty reference archive')
+        files, packaging_metadata = safe_zip_files(z)
         wrapped = all(i.filename.startswith(slug + '/') for i in files)
         for entry in files:
             name = entry.filename[len(slug) + 1:] if wrapped else entry.filename
@@ -540,6 +637,7 @@ def check_reference(root, hashes, specification):
         elif location in hashes:
             if hashes[location] == digest:
                 matched += 1
+                verified.add(location)
             else:
                 findings.append(dict(source='file', location=location, severity='medium', rule='reference-mismatch', reason='Differs from the supplied ZIP. Verify the reference version and any intentional edits.', line=None))
         elif target.exists():
@@ -808,6 +906,7 @@ def main():
     parser.add_argument('--db-row-limit', type=int, default=10000)
     parser.add_argument('--db-value-limit', type=int, default=1048576, help='Maximum characters per selected database value (65536 to 4194304)')
     parser.add_argument('--plugins', action='store_true', help='Opt in to official WordPress.org plugin checksum downloads')
+    parser.add_argument('--themes', action='store_true', help='Opt in to comparing themes with their WordPress.org ZIPs')
     parser.add_argument('--reference', action='append', default=[], help='Repeatable: plugin:folder=/private/reference.zip or theme:folder=/private/reference.zip')
     parser.add_argument('--persistence', action='store_true', help='Inventory common startup files and PHP configuration markers')
     parser.add_argument('--account-cron', action='store_true', help='Also list current SSH account crontab with command text redacted; implies --persistence')
@@ -844,6 +943,7 @@ def main():
         os.replace(pending, output / 'file-inventory.json')
         print('File inventory saved: ' + str(output / 'file-inventory.json'), flush=True)
     checks = {'core': 'not requested', 'database': 'not requested', 'plugins': 'not requested'}
+    verified = set()
     if args.core_version:
         print('Downloading official core checksums...', flush=True)
         try:
@@ -858,7 +958,7 @@ def main():
             if detected != version:
                 findings.append(dict(source='file', location='wp-includes/version.php', severity='review', rule='core-version-differs', line=None,
                                      reason=f'The site says it is WordPress {detected}, but this check used {version}. If you upgraded, update the profile or use --core-version auto; otherwise many core files will look changed.'))
-            core, unchecked = check_core(root, hashes, version, args.locale)
+            core, unchecked = check_core(root, hashes, version, args.locale, verified)
             findings.extend(core)
             checks['core'] = f'Compared with {version} / {args.locale}; {unchecked} manifest files unchecked.'
         except Exception as exc:
@@ -880,7 +980,7 @@ def main():
     if args.plugins:
         print('Checking WordPress.org plugin manifests; unavailable references will be marked unverified.', flush=True)
         try:
-            plugin_findings, plugin_status = check_plugins(root, hashes)
+            plugin_findings, plugin_status = check_plugins(root, hashes, verified)
             findings.extend(plugin_findings)
             checks['plugins'] = plugin_status
         except Exception as exc:
@@ -896,6 +996,15 @@ def main():
             except Exception as exc:
                 checks['references'].append({'status': 'FAILED', 'reason': type(exc).__name__, 'target': specification.split('=', 1)[0]})
                 limitations.append('A supplied reference ZIP comparison failed; check archive layout, target directory, and documented limits.')
+    if args.themes:
+        print('Comparing themes with their WordPress.org copies; themes without one will be marked unverified.', flush=True)
+        try:
+            theme_findings, theme_status = check_themes(root, hashes, {item.split('=', 1)[0] for item in args.reference}, verified)
+            findings.extend(theme_findings)
+            checks['themes'] = theme_status
+        except Exception as exc:
+            checks['themes'] = 'FAILED: ' + type(exc).__name__
+            limitations.append('Theme verification failed; no complete theme integrity conclusion.')
     if args.persistence or args.account_cron:
         print('Inspecting common startup locations without executing site code...', flush=True)
         try:
@@ -911,7 +1020,7 @@ def main():
             limitations.append('Optional persistence inspection failed; no startup-location conclusion.')
     limitations.extend([
         'Heuristic triage only: a report with no findings does not mean the site is clean.',
-        'The scanner uses its own pattern rules, not an external malware signature service, and never changes site files. Optional file quarantine/restore is a separate utility. Plugin checks are optional. Theme and custom/premium plugin integrity requires explicitly supplied trusted reference ZIPs.',
+        'The scanner uses its own pattern rules, not an external malware signature service, and never changes site files. Optional file quarantine/restore is a separate utility. Plugin and theme checks are optional. Themes and plugins not published on WordPress.org need explicitly supplied trusted reference ZIPs.',
         'Plugin identity/version is inferred from local headers, which may be modified. Custom/premium plugins, standalone files, mu-plugins, and renamed or ambiguous directories need trusted reference copies.',
         'Info and review entries are observations, not malware verdicts. Image marker classification checks container structure, not decoded pixels or server execution settings.',
         'Running processes, sibling websites, system configuration, and files outside the selected root are not inspected, apart from a wp-config.php directly above it. Account crontab is inspected only when explicitly requested.',
@@ -919,6 +1028,7 @@ def main():
         'Symlinks are skipped where detected. This is not a secure sandbox against a hostile process changing directory paths during the scan.',
         'Reports contain relative file paths and database record identifiers; keep reports private.'
     ])
+    mark_verified(findings, verified)
     # Add review fingerprints to reference findings only when bytes still match
     # the file snapshot used in that comparison. Missing files have no hash.
     for finding in findings:

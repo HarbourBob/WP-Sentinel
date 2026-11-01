@@ -1,6 +1,6 @@
 {
   "format": "sentinel-rules-1",
-  "version": "2026.10.30.2",
+  "version": "2026.11.01.1",
   "macros": {
     "gap": "(?:\\s|/\\*(?:[^*]|\\*(?!/))*\\*/|#[^\\n]*\\n|//[^\\n]*\\n)*",
     "request": "\\$_(?:GET|POST|REQUEST|COOKIE)",
@@ -54,7 +54,7 @@
      "reason": "A file to include is chosen by request input."},
     {"id": "remote-code-include", "severity": "high", "applies_to": ["php"],
      "literals": ["://"],
-     "all": ["\\b(?:include|require)(?:_once)?\\b{gap}\\(?{gap}@?{gap}['\"](?:https?|ftp|php|data)://"],
+     "all": ["\\b(?:include|require)(?:_once)?\\b{gap}\\(?{gap}@?{gap}['\"](?:https?|ftp|php|data)://[^'\"\\n]*['\"]{gap}\\)?{gap}(?:;|\\.|\\?>)"],
      "reason": "Code is included from a remote or stream location."},
     {"id": "upload-dropper", "severity": "high", "applies_to": ["php"],
      "literals": ["move_uploaded_file"],

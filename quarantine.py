@@ -157,8 +157,7 @@ def quarantine(root, store, relative, apply=False, expected=None):
         record_write(folder, record)
         return dict(preview, status='quarantined', id=item_id)
 
-def restore(root, store, item_id, apply=False, expected=None):
-    root, store = setup(root, store)
+def read_item(root, store, item_id):
     if not re.fullmatch('[a-f0-9]{32}', item_id):
         raise ValueError('Invalid quarantine ID.')
     folder = no_links(store / item_id)
@@ -166,6 +165,141 @@ def restore(root, store, item_id, apply=False, expected=None):
     record = json.loads(raw)
     if record.get('format') != 1 or record.get('id') != item_id or record.get('root') != str(root):
         raise ValueError('Record does not match this quarantine ID and website root.')
+    return folder, record
+
+def swap_in(path, data, mode, mtime_ns=None, gid=None):
+    """Write beside the target, then swap atomically, so the site never sees a missing or partial file."""
+    pending = path.parent / ('.sentinel-replace-' + uuid.uuid4().hex + '.tmp')
+    try:
+        write_exclusive(pending, data)
+        if os.name == 'posix' and gid is not None and gid != pending.stat().st_gid:
+            os.chown(pending, -1, gid)
+        os.chmod(pending, mode)
+        if mtime_ns is not None:
+            os.utime(pending, ns=(mtime_ns, mtime_ns))
+        os.replace(pending, path)
+    finally:
+        if pending.exists():
+            pending.unlink()
+
+def replace(root, store, relative, clean, expected, apply=False):
+    """Back up one file, then swap a clean copy into its place. The caller vouches for the clean bytes."""
+    root, store = setup(root, store)
+    path = target_path(root, relative)
+    data, info = read_regular(path)
+    if stat.S_IMODE(info.st_mode) & 0o7000:
+        raise ValueError('Files with special permission bits are not supported.')
+    if os.name == 'posix' and info.st_uid != os.geteuid():
+        raise ValueError('File owner differs from this SSH user; hosting support is needed.')
+    digest = sha(data)
+    if expected.lower() != digest:
+        raise ValueError('SHA-256 differs from the reviewed file. No action taken.')
+    preview = {'action': 'replace', 'file': relative, 'bytes': len(data), 'sha256': digest, 'replacement_sha256': sha(clean), 'status': 'preview'}
+    if not apply:
+        return preview
+    with store_lock(store):
+        current, current_info = read_regular(target_path(root, relative))
+        if sha(current) != digest or fingerprint(current_info) != fingerprint(info):
+            raise ValueError('Source changed since preview; no file replaced.')
+        item_id = uuid.uuid4().hex
+        folder = store / item_id
+        folder.mkdir(mode=0o700)
+        record = {'format': 1, 'id': item_id, 'root': str(root), 'relative_path': relative,
+                  'sha256': digest, 'bytes': len(data), 'replacement_sha256': sha(clean), 'mode': stat.S_IMODE(info.st_mode) & 0o777,
+                  'mtime_ns': info.st_mtime_ns, 'uid': getattr(info, 'st_uid', None), 'gid': getattr(info, 'st_gid', None),
+                  'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'status': 'preparing'}
+        record_write(folder, record)
+        write_exclusive(folder / 'payload.bin', data)
+        saved, _ = read_regular(folder / 'payload.bin')
+        if sha(saved) != digest:
+            raise ValueError('Backup verification failed; original remains in place.')
+        record['status'] = 'backed-up'
+        record_write(folder, record)
+        current, current_info = read_regular(target_path(root, relative))
+        if sha(current) != digest or fingerprint(current_info) != fingerprint(info):
+            raise ValueError('Source changed; preserved backup but did not replace the original.')
+        swap_in(path, clean, record['mode'], gid=record['gid'])
+        record['status'] = 'replaced'
+        record_write(folder, record)
+        return dict(preview, status='replaced', id=item_id)
+
+def undo_replace(root, store, item_id, apply=False):
+    """Put the saved original back, only if the file is still exactly what the replacement wrote."""
+    root, store = setup(root, store)
+    folder, record = read_item(root, store, item_id)
+    if not record.get('replacement_sha256') or record.get('status') not in ('backed-up', 'replaced'):
+        raise ValueError('This store item is not an active replacement.')
+    path = target_path(root, record['relative_path'])
+    current, info = read_regular(path)
+    if sha(current) != record['replacement_sha256']:
+        raise ValueError('File has changed since it was replaced. It will not be overwritten.')
+    data, _ = read_regular(no_links(folder / 'payload.bin'))
+    if sha(data) != record.get('sha256') or len(data) != record.get('bytes'):
+        raise ValueError('Stored file failed integrity verification.')
+    mode = record.get('mode')
+    if type(mode) is not int or not 0 <= mode <= 0o777:
+        raise ValueError('Invalid stored permissions.')
+    preview = {'action': 'undo-replace', 'file': record['relative_path'], 'sha256': sha(data), 'status': 'preview', 'id': item_id}
+    if not apply:
+        return preview
+    with store_lock(store):
+        current, current_info = read_regular(target_path(root, record['relative_path']))
+        if sha(current) != record['replacement_sha256'] or fingerprint(current_info) != fingerprint(info):
+            raise ValueError('File changed since preview; nothing was overwritten.')
+        swap_in(path, data, mode, record['mtime_ns'], record.get('gid'))
+        record['status'] = 'restored'
+        record['restored_utc'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record_write(folder, record)
+        return dict(preview, status='restored')
+
+def add_missing(root, store, relative, clean, apply=False):
+    """Put a clean copy where a file is missing. Never overwrites, and creates missing folders."""
+    root, store = setup(root, store)
+    path = target_path(root, relative)
+    if path.exists() or path.is_symlink():
+        raise ValueError('A file now exists at this path. It will not be overwritten.')
+    preview = {'action': 'add', 'file': relative, 'replacement_sha256': sha(clean), 'status': 'preview'}
+    if not apply:
+        return preview
+    with store_lock(store):
+        target_path(root, relative)
+        folder = root
+        for part in relative.split('/')[:-1]:
+            folder = no_links(folder / part)
+            if not folder.is_dir():
+                folder.mkdir()
+                os.chmod(folder, 0o755)
+        pending = path.parent / ('.sentinel-replace-' + uuid.uuid4().hex + '.tmp')
+        try:
+            write_exclusive(pending, clean)
+            os.chmod(pending, 0o644)
+            # Atomic no-overwrite publication, as in restore.
+            os.link(pending, path)
+        finally:
+            if pending.exists():
+                pending.unlink()
+        return dict(preview, status='added')
+
+def remove_added(root, store, relative, expected, apply=False):
+    """Undo add_missing, only if the file is still exactly the clean copy that was added."""
+    root, store = setup(root, store)
+    path = target_path(root, relative)
+    current, info = read_regular(path)
+    if sha(current) != expected.lower():
+        raise ValueError('File has changed since it was added. It will not be removed.')
+    preview = {'action': 'remove-added', 'file': relative, 'sha256': sha(current), 'status': 'preview'}
+    if not apply:
+        return preview
+    with store_lock(store):
+        current, current_info = read_regular(target_path(root, relative))
+        if sha(current) != expected.lower() or fingerprint(current_info) != fingerprint(info):
+            raise ValueError('File changed since preview; nothing was removed.')
+        os.unlink(path)
+        return dict(preview, status='removed')
+
+def restore(root, store, item_id, apply=False, expected=None):
+    root, store = setup(root, store)
+    folder, record = read_item(root, store, item_id)
     path = target_path(root, record['relative_path'])
     if path.exists() or path.is_symlink():
         raise ValueError('Restore destination already exists. It will not be overwritten.')

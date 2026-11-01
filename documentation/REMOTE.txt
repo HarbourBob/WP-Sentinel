@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.21.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
+WORDPRESS SENTINEL 0.23.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
 
 sentinel-remote.py runs on your computer. It connects with ssh, uploads the scanner
 to a temporary folder on the host, runs it, copies the evidence back, removes the
@@ -35,6 +35,9 @@ inside a website, use --remote-temp to choose one that is not.
 
 --reference plugin:folder=LOCAL.zip uploads a trusted ZIP for that run only.
 
+--themes compares each theme with its WordPress.org copy. Themes with no public copy
+are marked unverified.
+
 WHAT YOU GET
 
 sentinel-evidence/HOST-ID/RUN/ on your computer, one folder per run:
@@ -69,7 +72,7 @@ LIMITS: WHAT THIS DOES NOT PROVE
 
 Quarantine and restore still run on the host, because their private store must be
 there. Keep a hosted install for those (see INSTALL.txt). The commands shown in a
-remote report apply to that hosted install, with your profile in place of PROFILE,
+remote report apply to that hosted install, with your profile, such as ../site.json, in place of PROFILE,
 and report paths must be on the host for the review command. BATCH-QUARANTINE.txt
 shows how to copy a report up for a batch.
 

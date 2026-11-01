@@ -284,9 +284,9 @@ def consolidate(reports_dir, output, root, reviews_dir=None, store=None, db_stor
         for category, value in report['checks'].items():
             if value == 'not requested':
                 continue
-            if category in {'plugins', 'references'} and isinstance(value, list):
+            if category in {'plugins', 'themes', 'references'} and isinstance(value, list):
                 for entry in value:
-                    key = category + ':' + str(entry.get('target', entry.get('plugin', 'unknown')))
+                    key = category + ':' + str(entry.get('target', entry.get('plugin', entry.get('theme', 'unknown'))))
                     checks[key] = {'observed_at': stamp, 'report': str(path), 'result': entry}
             else:
                 checks[category] = {'observed_at': stamp, 'report': str(path), 'result': value}

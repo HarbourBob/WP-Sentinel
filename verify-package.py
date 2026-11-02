@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import stat
 
-RELEASE = '0.23.0-rc1'
+RELEASE = '0.24.0-rc1'
 MANIFEST = 'package-manifest.json'
 MAX_BYTES = 16 * 1024 * 1024
 

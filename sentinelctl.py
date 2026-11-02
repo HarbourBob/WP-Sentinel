@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WordPress Sentinel 0.23.0-rc1: one entry point, explicit operations."""
+"""WordPress Sentinel 0.24.0-rc1: one entry point, explicit operations."""
 import argparse
 import datetime
 import importlib.util
@@ -88,6 +88,17 @@ def parser():
     c = sub.add_parser('file-changes', allow_abbrev=False)
     c.add_argument('--before', type=Path, required=True)
     c.add_argument('--after', type=Path, required=True)
+    c = sub.add_parser('timeline', allow_abbrev=False)
+    c.add_argument('--inventory', type=Path, required=True)
+    c.add_argument('--since', help='List only entries modified or changed on or after this UTC date, such as 2026-10-01')
+    c.add_argument('--limit', type=int, help='Rows per table in the HTML page')
+    c = sub.add_parser('vulns', allow_abbrev=False)
+    c.add_argument('--report', type=Path, required=True)
+    c.add_argument('--key-file', type=Path, help='File holding your Wordfence Intelligence API key, permissions 600; or set WORDFENCE_API_KEY')
+    c = sub.add_parser('checklist', allow_abbrev=False)
+    c.add_argument('--report', type=Path, required=True)
+    c.add_argument('--vulns', type=Path, help='vulnerabilities.json from the vulns command')
+    c.add_argument('--timeline', type=Path, help='timeline.json from the timeline command')
     for scan_name in ('scan', 'routine-check'):
         c = sub.add_parser(scan_name, allow_abbrev=False)
         c.add_argument('--file-inventory', action='store_true')
@@ -210,6 +221,25 @@ def command(args, profile):
     elif name == 'file-changes':
         script = 'file_changes.py'
         tail = common + ['--before', str(args.before), '--after', str(args.after), '--output', str(private / ('file-changes-' + stamp))]
+    elif name == 'timeline':
+        script = 'timeline.py'
+        tail = common + ['--inventory', str(args.inventory), '--output', str(private / ('timeline-' + stamp))]
+        for flag in ['since', 'limit']:
+            if getattr(args, flag) is not None:
+                tail += ['--' + flag, str(getattr(args, flag))]
+    elif name == 'vulns':
+        script = 'vulns.py'
+        tail = ['--report', str(args.report), '--output', str(private / ('vulns-' + stamp)), '--cache', str(private / 'vuln-feed')]
+        if args.key_file:
+            tail += ['--key-file', str(args.key_file)]
+    elif name == 'checklist':
+        script = 'checklist.py'
+        scan = 'python3 -I -S sentinelctl.py --profile ' + str(args.profile) + ' scan --file-inventory --core --plugins --themes --persistence'
+        tail = ['--report', str(args.report), '--output', str(private / ('checklist-' + stamp)), '--scan-command', scan,
+                '--monitor-command', 'python3 -I -S sentinelctl.py --profile ' + str(args.profile) + ' routine-check --core --plugins --persistence --alert-config ../alerts.json']
+        for flag in ['vulns', 'timeline']:
+            if getattr(args, flag):
+                tail += ['--' + flag, str(getattr(args, flag))]
     elif name == 'changes':
         script = 'changes.py'
         tail = common + ['--before', str(args.before), '--after', str(args.after),

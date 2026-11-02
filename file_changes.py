@@ -12,6 +12,8 @@ import re
 spec = importlib.util.spec_from_file_location('inventory_paths', Path(__file__).with_name('manage.py'))
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+OWNERSHIP = ('mode', 'uid', 'gid')
+TIMES = ('mtime_utc', 'ctime_utc')
 
 def validate(value, root):
     if value.get('format') != 'sentinel-file-inventory-1' or value.get('site_root') != str(root):
@@ -35,6 +37,13 @@ def validate(value, root):
         if entry['status'] == 'hashed':
             if not re.fullmatch('[a-f0-9]{64}', str(entry.get('sha256', ''))) or type(entry.get('bytes')) is not int or entry['bytes'] < 0:
                 raise ValueError('Invalid file digest or size')
+        # Permissions, owner and times are optional: inventories before 0.24 do not have them.
+        if 'mode' in entry and not re.fullmatch('[0-7]{4}', str(entry['mode'])):
+            raise ValueError('Invalid file mode')
+        if any(key in entry and (type(entry[key]) is not int or entry[key] < 0) for key in ('uid', 'gid')):
+            raise ValueError('Invalid file owner')
+        if any(key in entry and entry[key] is not None and not isinstance(entry[key], str) for key in TIMES):
+            raise ValueError('Invalid file time')
     return value
 
 def read(path, root):
@@ -54,10 +63,13 @@ def compare(before, after, root):
     validate(before, root); validate(after, root)
     if datetime.datetime.fromisoformat(after['started_utc']) < datetime.datetime.fromisoformat(before['finished_utc']):
         raise ValueError('Inventories overlap or are reversed; use two sequential scans')
-    groups = {k: [] for k in ('added','changed','missing','unchanged','directories_added','directories_missing','unknown')}
+    groups = {k: [] for k in ('added','changed','missing','unchanged','directories_added','directories_missing','unknown','permissions_changed')}
     old, new = before['entries'], after['entries']
     for path in sorted(set(old) | set(new)):
         a, b = old.get(path), new.get(path)
+        # Listed alongside the content result, so a chmod or new owner shows even when the bytes did not change.
+        if a and b and any(k in a and k in b and a[k] != b[k] for k in OWNERSHIP):
+            groups['permissions_changed'].append(dict(path=path, before={k: a.get(k) for k in OWNERSHIP + TIMES}, after={k: b.get(k) for k in OWNERSHIP + TIMES}, reason=''))
         ah, bh = bool(a and a['status'] == 'hashed'), bool(b and b['status'] == 'hashed')
         if a and b and a['status'] == b['status'] == 'directory':
             continue
@@ -96,7 +108,7 @@ def main():
         out = m.private_path(a.output,root); out.mkdir(mode=0o700,parents=True,exist_ok=False)
         (out/'file-changes.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
         page = '<!doctype html><meta charset="utf-8"><title>Sentinel file changes</title><style>body{font:16px system-ui;max-width:1100px;margin:2em auto;padding:1em}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>File changes</h1><p>'+html.escape(result['note'])+'</p>'
-        for name in ('added','changed','missing','directories_added','directories_missing','unknown','unchanged'):
+        for name in ('added','changed','permissions_changed','missing','directories_added','directories_missing','unknown','unchanged'):
             page += '<h2>'+name.replace('_', ' ').capitalize()+' ('+str(result['counts'][name])+')</h2><details><summary>Show entries</summary><pre>'+html.escape(json.dumps(result['groups'][name],indent=2))+'</pre></details>'
         for name in ('before','after'):
             page += '<h2>'+name.capitalize()+' coverage</h2><pre>'+html.escape(json.dumps(result[name],indent=2))+'</pre>'

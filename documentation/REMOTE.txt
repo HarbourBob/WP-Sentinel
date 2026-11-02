@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.23.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
+WORDPRESS SENTINEL 0.24.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
 
 sentinel-remote.py runs on your computer. It connects with ssh, uploads the scanner
 to a temporary folder on the host, runs it, copies the evidence back, removes the
@@ -45,6 +45,13 @@ sentinel-evidence/HOST-ID/RUN/ on your computer, one folder per run:
   report.html, report.json   The report.
   file-inventory.json        File hashes from this run.
   file-changes.json          Changes since the previous run, when there is one.
+  timeline.html, .json       File dates, permissions and owners. See FILE-INVENTORY.txt.
+  vulnerabilities.html, .json  Known vulnerabilities in installed versions, when an
+                             API key or cached feed is available. See VULNERABILITIES.txt.
+
+After an incident, build a checklist from a run. See CHECKLIST.txt:
+
+python sentinel-remote.py checklist --run sentinel-evidence/SITE/RUN
   EVIDENCE.json              A hash of each file, linked to the previous run.
 
 chain.json links the runs in order. Check that nothing has changed with:

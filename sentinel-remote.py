@@ -276,6 +276,60 @@ def compare_with_previous(site_dir, run_dir):
     (run_dir / 'file-changes.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     return result, None
 
+def write_timeline(run_dir):
+    """Build timeline.html from this run's inventory, before sealing so it is covered by the seal."""
+    timeline = load_module('timeline')
+    try:
+        inventory = json.loads((run_dir / 'file-inventory.json').read_text(encoding='utf-8'))
+        # The inventory came from the host, so it is checked before anything is built from it.
+        timeline.fc.validate(inventory, inventory['site_root'])
+        timeline.write(timeline.build(inventory), run_dir)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return 'Could not build the timeline: ' + type(error).__name__
+    return None
+
+def write_vulns(run_dir, evidence, args):
+    """Check the host's software list against the vulnerability feed, on this computer, before sealing."""
+    if args.no_vuln_check:
+        return 'Vulnerability check skipped (--no-vuln-check).'
+    vulns = load_module('vulns')
+    cache = evidence / 'vuln-feed'
+    try:
+        key = vulns.read_key(args.vuln_key_file)
+        if not key and not (cache / 'wordfence-index.json').is_file():
+            return 'Vulnerability check skipped: no API key. See VULNERABILITIES.txt to set one up.'
+        report = json.loads((run_dir / 'report.json').read_text(encoding='utf-8'))
+        if not isinstance(report.get('software'), dict):
+            return 'Vulnerability check skipped: the report has no software list.'
+        feed, notes = vulns.load_feed(cache, key)
+        result = vulns.check(report['software'], feed, notes)
+        vulns.write(result, run_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        # The key never appears here: errors are reported by type or by our own messages.
+        return 'Vulnerability check failed: ' + (str(error) if isinstance(error, ValueError) else type(error).__name__)
+    serious = sum(result['counts'][r] for r in ('Critical', 'High'))
+    return (f'Vulnerabilities: {len(result["vulnerabilities"])} known in {result["affected_software"]} installed items, {serious} critical or high. '
+            + str(run_dir / 'vulnerabilities.html'))
+
+def make_checklist(args):
+    checklist = load_module('checklist')
+    run_dir = Path(os.path.abspath(args.run))
+    if not RUN_FOLDER.fullmatch(run_dir.name) or not (run_dir / 'report.json').is_file():
+        raise ValueError('--run must be a run folder holding report.json, such as sentinel-evidence/SITE/20261101T204908Z-c29d80')
+    load = lambda name: json.loads((run_dir / name).read_text(encoding='utf-8')) if (run_dir / name).is_file() else None
+    sealed = load('EVIDENCE.json') or {}
+    scan_command = monitor_command = None
+    if sealed.get('host') and sealed.get('root'):
+        base = ['python', 'sentinel-remote.py', 'scan', '--host', sealed['host'], '--root', sealed['root'], '--core', '--plugins', '--themes', '--persistence']
+        scan_command = shlex.join(base)
+        monitor_command = shlex.join(base + ['--unattended', '--alert-config', 'alerts.json', '--prune-keep', '30'])
+    result = checklist.build(load('report.json'), load('vulnerabilities.json'), load('timeline.json'), scan_command, monitor_command)
+    output = run_dir.parent / ('checklist-' + run_dir.name)
+    output.mkdir(mode=0o700)
+    checklist.write(result, output)
+    print('Checklist: ' + str(output / 'checklist.html'))
+    return 0
+
 def remote_scan_arguments(args, run_path, references):
     tail = [args.remote_python, '-I', '-S', run_path + '/sentinel.py', '--root', args.root, '--output', run_path + '/report',
             '--file-inventory', '--max-file-mb', str(args.max_file_mb)]
@@ -402,6 +456,8 @@ def run_scan(args):
         except (RuntimeError, OSError, subprocess.TimeoutExpired):
             print('WARNING: could not remove the temporary folder on the host: ' + run_path, file=sys.stderr, flush=True)
     comparison, note = compare_with_previous(site_dir, run_dir)
+    timeline_problem = write_timeline(run_dir)
+    vuln_line = write_vulns(run_dir, evidence, args)
     seal_value = seal(run_dir, site_dir, {'host': args.host, 'root': args.root, 'started_utc': started.isoformat(), 'scan_exit_code': code,
                                           'program_sha256': expected, 'note': 'Records what this computer received. It cannot prove the host reported honestly.'})
     print('Sealed run ' + run_dir.name + ' (' + seal_value[:16] + '...)')
@@ -409,6 +465,8 @@ def run_scan(args):
         print('Changes since ' + comparison['before']['run'] + ': ' + json.dumps({k: v for k, v in comparison['counts'].items() if v and k != 'unchanged'}))
     else:
         print(note)
+    print(timeline_problem or 'Timeline: ' + str(run_dir / 'timeline.html'))
+    print(vuln_line)
     print('Open the report: ' + str(run_dir / 'report.html'))
     return code, run_dir, comparison
 
@@ -684,6 +742,8 @@ def parser():
         c.add_argument('--db-value-limit', type=int)
         c.add_argument('--php')
         c.add_argument('--fail-on', choices=['high', 'medium', 'review', 'info'])
+        c.add_argument('--vuln-key-file', type=Path, help='File holding your Wordfence Intelligence API key, for the vulnerability check; or set WORDFENCE_API_KEY')
+        c.add_argument('--no-vuln-check', action='store_true', help='Skip checking installed versions for known vulnerabilities')
     def search(c):
         c.add_argument('--start', action='append', help='Host folder to search; repeatable. Default: your home folder')
     c = sub.add_parser('scan', allow_abbrev=False, help='Run a scan on the host and bring the evidence back')
@@ -709,6 +769,8 @@ def parser():
     c.add_argument('--evidence-dir', default='sentinel-evidence')
     c.add_argument('--keep', type=int, required=True, help='How many of the newest runs to keep for each site')
     c.add_argument('--apply', action='store_true', help='Permanently remove the folders listed in the preview')
+    c = sub.add_parser('checklist', allow_abbrev=False, help='Build a post-incident checklist from one run')
+    c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
     c = sub.add_parser('alert-test', allow_abbrev=False, help='Send a test alert')
     c.add_argument('--alert-config', type=Path, required=True)
     c.add_argument('--site-name', default='test')
@@ -720,7 +782,7 @@ def main(argv=None):
     if getattr(args, 'start', False) is None:
         args.start = ['~']
     try:
-        return {'scan': scan, 'discover': discover, 'scan-all': scan_all, 'verify': verify, 'prune': prune, 'alert-test': alert_test}[args.action](args)
+        return {'scan': scan, 'discover': discover, 'scan-all': scan_all, 'verify': verify, 'prune': prune, 'checklist': make_checklist, 'alert-test': alert_test}[args.action](args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print('Stopped: ' + str(error), file=sys.stderr)
         return 2

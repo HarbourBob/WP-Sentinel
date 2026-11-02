@@ -85,3 +85,48 @@ A skipped symlink or unreadable directory now only prevents added/missing conclu
 for paths inside it; a file limit still affects the whole inventory. Older inventories
 keep the earlier all-or-nothing behaviour. The new fields are uninspected_directories,
 file_limit_reached and traversal_scope_known.
+
+PERMISSIONS, OWNERS AND DATES
+Each inventory entry now also records its modified time (mtime_utc) and, on Linux
+hosts, its permissions (mode, such as 0644), owner (uid, gid) and status-change time
+(ctime_utc). owner_names maps each uid to its account name. metadata_fields lists
+what was recorded. Times are UTC and taken from the same file reads as the hashes.
+
+file-changes adds a permissions_changed group: entries whose mode or owner differ
+between the two inventories, whether or not the content changed. It is listed
+alongside the content result, so a file can appear in both. Inventories made before
+this update have no permissions, so they never produce this group.
+
+Build a timeline from one inventory:
+
+python3 -I -S sentinelctl.py --profile ../site.json timeline --inventory ../report-LATER/file-inventory.json
+
+Add --since 2026-10-01 to list only entries modified or changed from that date, and
+--limit 2000 for longer tables in the page. A new timeline-* folder receives
+timeline.json and timeline.html. sentinel-remote.py builds both automatically in each
+run folder. timeline.json keeps the newest 5,000 entries; file-inventory.json still
+has every entry.
+
+The page shows activity by day, so a burst of writes on one day stands out, bulk
+changes, the most recent entries, and flags. A bulk change is when more than 20 older
+files had their status changed within a minute of each other, such as a WordPress
+update, a restore, a migration or a bulk chmod. Each is listed once with its time
+span and size; check it matches something you or your host did. Files changed on
+their own are flagged:
+
+world-writable       Any account on the server can change it.
+setuid-or-setgid     Runs with its owner's or group's rights. Rare in a website.
+other-owner          Owned by a different account from most of the site, such as
+                     the web server writing files itself.
+ctime-after-mtime    Status changed more than a day after the content was dated, and
+                     not as part of a bulk change. Usually a chmod, or one file
+                     copied with its old date. It is also what setting a file's
+                     date back looks like.
+future-dated         Modified after the scan: set by hand, or a clock is wrong.
+
+Flags are prompts for review, not findings, and do not change the report's priority
+counts. Flagged entries are listed whatever --since says. Anyone who can write a file
+can also set its modified time, but not its status-change time, so compare both. A
+quiet timeline is not proof that nothing changed, and an attacker who changes many
+files at once lands in a bulk change, not in the flags. Timelines from inventories
+made before this update say so and stay empty.

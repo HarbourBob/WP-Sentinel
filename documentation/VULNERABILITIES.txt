@@ -1,0 +1,71 @@
+WORDPRESS SENTINEL — FIND THE WAY IN
+
+Removing malware without closing the entry point usually means reinfection. This
+check compares the installed WordPress core, plugin and theme versions with the
+Wordfence Intelligence vulnerability feed, and lists every known vulnerability
+with the version that fixes it.
+
+Every scan now records the installed versions in report.json under "software",
+read from file headers as text. Nothing on the site is run or changed.
+
+GET A FREE API KEY
+
+The feed is free for personal and commercial use, but needs a key.
+
+1. Create an account at wordfence.com and sign in.
+2. Open Account, then Integrations, and create a Vulnerability Data Feed API key.
+   It is shown only once, so copy it.
+3. Save it on your own computer in a file holding just the key, for example
+   C:\Users\YOU\.wordfence-key or ~/.wordfence-key. On Linux and Mac, chmod 600 it.
+
+Alternatively set the WORDFENCE_API_KEY environment variable. The key is sent only
+to wordfence.com, and never saved in reports, evidence or on the host.
+
+FROM YOUR OWN COMPUTER
+
+Add the key file to a remote scan:
+
+python sentinel-remote.py scan --host user@example.com --root /home/user/public_html --core --plugins --themes --persistence --vuln-key-file PATH-TO-KEY-FILE
+
+The check runs on your computer, after the evidence is copied back. The run folder
+gains vulnerabilities.html and vulnerabilities.json, covered by the seal.
+
+The feed is kept in sentinel-evidence/vuln-feed and downloaded again only when it
+is over 24 hours old, so the key is used at most once a day. Once a feed is cached,
+later scans use it even without the key, and say how old it is. --no-vuln-check
+skips the check.
+
+ON THE HOST
+
+python3 -I -S sentinelctl.py --profile ../site.json vulns --report ../report-LATER/report.json --key-file ../wordfence-key
+
+Keep the key file in the private folder with permissions 600, never inside
+public_html. A vulns-* folder receives the results, and the feed is cached in
+vuln-feed in the private folder.
+
+READING THE RESULTS
+
+Each row shows the severity (CVSS rating and score), the installed version, the
+vulnerability with a link to its Wordfence record, and the fix. Rows are ordered
+most severe first; informational ones come last. "No fixed version is known"
+means remove or replace that plugin or theme.
+
+A vulnerable version is a likely way in, not proof of how the site was entered.
+Update or remove everything listed, as well as cleaning up what the scan found.
+
+LIMITS
+
+- Versions are read from file headers, which an attacker can edit.
+- Custom code, must-use plugins, and anything not in the feed are not covered.
+- Items with no readable version are listed as not checked.
+- No result does not mean the site is safe: the feed only covers what has been
+  disclosed.
+- Wordfence limits how often the feed can be downloaded. If it refuses, the cached
+  copy is used and its age is shown.
+
+COPYRIGHT
+
+Vulnerability records are copyright Defiant Inc. and, for CVE details, The MITRE
+Corporation. vulnerabilities.html links each record and reproduces their notices
+and licences, as the feed's terms require. By using the feed you agree to the
+Wordfence Intelligence Terms and Conditions.

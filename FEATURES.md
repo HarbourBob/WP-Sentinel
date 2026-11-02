@@ -1,4 +1,4 @@
-# WP Sentinel 0.23.0-rc1: Feature List
+# WP Sentinel 0.24.0-rc1: Feature List
 
 > **Back up your site first, if at all possible.** Keep the backup away from the website.
 
@@ -55,7 +55,17 @@ This is new, largely untested software with no guarantees. See [Known limits](#k
 - **JSON:** the same results for other tools to read.
 - **Exit codes:** separate codes for coverage gaps, `--fail-on` matches and failed alerts.
 
+## Finding the way in
+
+- **Known vulnerabilities:** installed core, plugin and theme versions are checked against
+  the Wordfence Intelligence feed, with the version that fixes each one. Needs a free API
+  key; the feed is cached for a day.
+
 ## Fixing problems
+
+- **Post-incident checklist:** built from a scan. It covers closing the way in, rotating
+  salts and passwords, ending sessions, clearing caches and watching for reinfection,
+  and names what that scan found.
 
 Every action below previews first and needs `--apply` to make a change.
 
@@ -88,7 +98,9 @@ Every action below previews first and needs `--apply` to make a change.
 ## Review and history
 
 - **Review notes:** tied to a file's hash, so a note stops applying if the file changes.
-- **Comparisons:** see what changed between scans.
+- **Comparisons:** see what changed between scans, including permission and owner changes.
+- **Timeline:** file dates, permissions and owners from each inventory, with activity by
+  day and flags for world-writable files, unexpected owners and dates that look set back.
 - **Inventories:** summaries, report history and quarantine inventories.
 - **Package check:** confirms an upload matches the release. It checks consistency and is
   not a digital signature.
@@ -104,9 +116,5 @@ Every action below previews first and needs `--apply` to make a change.
   in a hosting panel.
 
 ## Not built yet
-
-- A richer inventory, with permissions and dates for building a timeline.
-- Vulnerability feed checks.
-- A post-incident checklist.
 
 Ideas and forks are welcome. See [Contributing](README.md#contributing).

@@ -1,0 +1,52 @@
+WORDPRESS SENTINEL — POST-INCIDENT CHECKLIST
+
+After a compromise, cleaning files is only part of the job. The checklist covers the
+rest: closing the way in, rotating salts and passwords, ending sessions, clearing
+caches and watching for reinfection.
+
+It is built from one scan, so it names what that scan found: vulnerable plugins to
+update, findings to deal with, cache plugins to purge, and checks the scan did not
+run. Items tailored from the scan carry a small status label.
+
+FROM YOUR OWN COMPUTER
+
+python sentinel-remote.py checklist --run sentinel-evidence/SITE/RUN
+
+RUN is a run folder, such as 20261101T204908Z-c29d80. The checklist uses that run's
+report, vulnerability check and timeline, and its commands use that run's host and
+root. It is written to a checklist-RUN folder beside the run, so the sealed run is
+not changed.
+
+ON THE HOST
+
+python3 -I -S sentinelctl.py --profile ../site.json checklist --report ../report-LATER/report.json --vulns ../vulns-LATER/vulnerabilities.json
+
+--vulns and --timeline are optional. A checklist-* folder receives checklist.html and
+checklist.json.
+
+USING IT
+
+Open checklist.html and tick items as you go. Ticks are saved in that browser only;
+another browser or computer starts empty. checklist.json has the same items for
+other tools.
+
+The sections are:
+
+Before you change anything   Back up, and keep the evidence unchanged.
+Close the way in             Vulnerable versions, updates, unused plugins and
+                             themes, unknown administrators, leftover files.
+Remove what was found        Findings, startup files, scheduled tasks, content.
+Rotate salts and passwords   Salts, WordPress, database, hosting, API keys, email.
+End sessions                 Sign everyone out, application passwords, connected
+                             services.
+Clear caches                 Plugin, object, host and CDN caches, then check the
+                             live site.
+Watch for reinfection        Scan again, daily scans with alerts, timeline,
+                             weekly vulnerability checks, blocklists, logs.
+Afterwards                   Write it up, and decide whether to report a breach.
+
+LIMITS
+
+A starting point, not a complete incident response. It cannot see your hosting
+panel, email, CDN or other services, so those items are reminders. If the site holds
+customer data or takes payments, consider professional incident response.

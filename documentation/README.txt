@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.23.0-rc1
+WORDPRESS SENTINEL 0.24.0-rc1
 
 BACK UP YOUR SITE FIRST, IF AT ALL POSSIBLE. Keep the backup away from the website.
 
@@ -34,12 +34,30 @@ WHERE TO START
   BATCH-QUARANTINE.txt    Move hundreds of reviewed files from one checked plan, and undo it.
   CLEAN-REPLACEMENT.txt   Swap changed core, plugin and theme files for clean copies, and undo it.
   MANAGEMENT.txt          Report history, review notes and inventories.
-  FILE-INVENTORY.txt      Compare file hashes between scans.
+  FILE-INVENTORY.txt      Compare file hashes between scans, and build a timeline.
+  VULNERABILITIES.txt     Find the way in: check installed versions for known vulnerabilities.
+  CHECKLIST.txt           Post-incident checklist: salts, passwords, sessions, caches, reinfection.
   PERSISTENCE.txt         Startup files and account crontab.
   DATABASE-CONTENT.txt    Replace one post's content, with a guarded restore.
   DATABASE-INVENTORY.txt  Offline check of database backups.
   DATABASE-VERIFY.txt     Check a recorded database operation against live data.
   PACKAGE-CHECK.txt       Confirm an upload matches the release.
+
+WHAT IS NEW IN 0.24
+
+- Find the way in: installed core, plugin and theme versions are checked against the
+  Wordfence Intelligence vulnerability feed, with the version that fixes each one.
+  Needs a free API key. Every report now lists the installed versions. See
+  VULNERABILITIES.txt.
+- Post-incident checklist, built from a scan: closing the way in, rotating salts and
+  passwords, ending sessions, clearing caches and watching for reinfection. See
+  CHECKLIST.txt.
+- File inventories record permissions, owners and dates. A new timeline shows
+  activity by day, bulk changes and unusual files, and file-changes lists permission
+  and owner changes. See FILE-INVENTORY.txt.
+- sentinel-remote.py on Linux and Mac stops after 30 seconds on a port that does
+  not answer as SSH. On Windows, where that setting delays every connection, it is
+  no longer used.
 
 WHAT IS NEW IN 0.23
 

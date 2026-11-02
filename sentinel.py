@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
-VERSION = '0.23.0-rc1'
+VERSION = '0.24.0-rc1'
 SEVERITIES = ('high', 'medium', 'review', 'info')
 PHP_SUFFIXES = {'.php', '.phtml', '.php3', '.php4', '.php5', '.php7', '.php8', '.phar', '.pht', '.phtm', '.phps'}
 SCRIPT_SUFFIXES = {'.js', '.html', '.htm', '.svg'}
@@ -220,16 +220,50 @@ def oversized_findings(path, rel, name, max_bytes):
                                     reason=item['reason'] + ' Seen in the start or end of an oversized file; the middle was not inspected.'))
     return results
 
+def utc_stamp(ns):
+    try:
+        return datetime.datetime.fromtimestamp(ns // 1000000000, datetime.timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+def file_metadata(st):
+    """Permissions, owner and times for a timeline. Owner, mode and status-change time only mean something on POSIX."""
+    details = dict(mtime_utc=utc_stamp(st.st_mtime_ns))
+    if os.name == 'posix':
+        details.update(mode=format(stat.S_IMODE(st.st_mode), '04o'), uid=st.st_uid, gid=st.st_gid, ctime_utc=utc_stamp(st.st_ctime_ns))
+    return details
+
+def lstat_or_none(path):
+    try:
+        return os.lstat(path)
+    except OSError:
+        return None
+
+def owner_names(entries):
+    """Account names for the owners seen, so a timeline can show which account wrote a file."""
+    try:
+        import pwd
+    except ImportError:
+        return {}
+    names = {}
+    for uid in {e['uid'] for e in entries.values() if type(e.get('uid')) is int}:
+        try:
+            names[str(uid)] = pwd.getpwuid(uid).pw_name
+        except (KeyError, OverflowError):
+            pass
+    return names
+
 def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
     findings, files, limitations = [], {}, []
     if inventory is not None:
         inventory.update(format='sentinel-file-inventory-1', site_root=str(root), status='in-progress',
                          started_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                          max_bytes=max_bytes, max_files=max_files, traversal_complete=True, entries={},
-                         uninspected_directories=[], file_limit_reached=False, traversal_scope_known=True)
-    def observed(path, status, **details):
+                         uninspected_directories=[], file_limit_reached=False, traversal_scope_known=True,
+                         metadata_fields=['mtime_utc'] + (['mode', 'uid', 'gid', 'ctime_utc'] if os.name == 'posix' else []))
+    def observed(path, status, st=None, **details):
         if inventory is not None:
-            inventory['entries'][str(path)] = dict(status=status, **details)
+            inventory['entries'][str(path)] = dict(status=status, **details, **(file_metadata(st) if st is not None else {}))
     def directory_gap(relative):
         # Keep the gap specific so one skipped folder does not blind comparisons elsewhere.
         if inventory is not None:
@@ -257,11 +291,12 @@ def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
     for folder, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
         safe_dirs = []
         for name in dirs:
-            observed(Path(folder, name).relative_to(root).as_posix(), 'directory')
+            details = lstat_or_none(Path(folder, name))
+            observed(Path(folder, name).relative_to(root).as_posix(), 'directory', details)
             if Path(folder, name).is_symlink():
                 skipped['symlinks'] += 1
                 relative = Path(folder, name).relative_to(root).as_posix()
-                observed(relative, 'symlink-directory')
+                observed(relative, 'symlink-directory', details)
                 directory_gap(relative)
                 symlink_finding(Path(folder, name), relative)
             elif Path(folder, name).relative_to(root).as_posix() in separate_sites:
@@ -281,18 +316,18 @@ def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
             observed(rel, 'unreadable-or-changed')
             try:
                 if path.is_symlink():
-                    observed(rel, 'symlink')
+                    observed(rel, 'symlink', lstat_or_none(path))
                     skipped['symlinks'] += 1
                     symlink_finding(path, rel)
                     continue
                 if not path.is_file():
                     skipped['nonregular'] += 1
-                    observed(rel, 'nonregular')
+                    observed(rel, 'nonregular', lstat_or_none(path))
                     continue
                 before = path.stat()
                 if before.st_size > max_bytes:
                     skipped['oversized'] += 1
-                    observed(rel, 'oversized')
+                    observed(rel, 'oversized', before)
                     limitations.append(f'Oversized file not fully inspected: {rel} ({before.st_size} bytes).')
                     findings.extend(oversized_findings(path, rel, name, max_bytes))
                     continue
@@ -313,9 +348,9 @@ def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
                 stable = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
                 if stable(before) != stable(opened) or stable(opened) != stable(after) or (os.name == 'posix' and opened.st_ctime_ns != after.st_ctime_ns) or len(data) != after.st_size:
                     skipped['changed'] += 1
-                    observed(rel, 'changed-during-read')
+                    observed(rel, 'changed-during-read', after)
                     continue
-                observed(rel, 'hashed', bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+                observed(rel, 'hashed', opened, bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
                 files[rel] = hashlib.md5(data).hexdigest()
                 # Contents stay in memory: only rule names, line numbers and hashes are recorded,
                 # which is what makes it safe to include configuration files holding secrets.
@@ -352,7 +387,7 @@ def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
     if inventory is not None:
         inventory.update(status='finished', traversal_complete=inventory['traversal_complete'] and not stopped,
                          finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                         limitations=list(limitations), skipped_counts=skipped)
+                         limitations=list(limitations), skipped_counts=skipped, owner_names=owner_names(inventory['entries']))
     return findings, files, limitations, visited
 
 def core_manifest(version, locale):
@@ -802,6 +837,27 @@ def detect_core_version(root):
         raise ValueError('Could not find a version in wp-includes/version.php')
     return match.group(1)
 
+def software_inventory(root):
+    """Installed core, plugin and theme versions, read from headers as text, for the vulnerability check."""
+    software = {'core': None, 'plugins': [], 'themes': []}
+    try:
+        software['core'] = detect_core_version(root)
+    except (OSError, ValueError):
+        pass
+    for kind, reader in (('plugins', plugin_version), ('themes', theme_version)):
+        base = root / 'wp-content' / kind
+        if base.is_symlink() or (root / 'wp-content').is_symlink() or not base.is_dir():
+            continue
+        for directory in sorted(base.iterdir()):
+            if directory.is_symlink() or not directory.is_dir() or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', directory.name):
+                continue
+            try:
+                version = reader(directory)
+            except OSError:
+                version = None
+            software[kind].append({'slug': directory.name, 'version': version})
+    return software
+
 def finding_commands(finding, index, report_path, profile):
     """Ready-to-paste commands for one finding. Previews only: none of these change anything."""
     digest = finding.get('sha256')
@@ -1052,7 +1108,8 @@ def main():
     findings.sort(key=lambda item: SEVERITIES.index(item['severity']) if item['severity'] in SEVERITIES else len(SEVERITIES))
     priorities = {level: sum(item['severity'] == level for item in findings) for level in SEVERITIES}
     report = dict(version=VERSION, rules_version=pack['version'], site_root=str(root), priority_counts=priorities, created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                  entries_visited=visited, files_inspected=len(hashes), checks=checks, findings=findings, limitations=limitations)
+                  entries_visited=visited, files_inspected=len(hashes), checks=checks, findings=findings, limitations=limitations,
+                  software=software_inventory(root))
     if file_inventory is not None:
         report['file_inventory'] = {'filename': 'file-inventory.json', 'hashed_files': sum(e['status'] == 'hashed' for e in file_inventory['entries'].values()), 'traversal_complete': file_inventory['traversal_complete'], 'note': 'Saved from the file-scan phase; exclusions and skipped paths are listed in the inventory. Not an atomic snapshot or clean baseline.'}
     write_atomic(output / 'report.json', json.dumps(report, indent=2))

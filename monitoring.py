@@ -27,7 +27,7 @@ EXIT_ALERT_FAILED = 5
 REMINDER = 'Findings need review and are not malware verdicts. No alert does not mean the site is clean.'
 LOCAL_HOSTS = {'localhost', '127.0.0.1', '::1'}
 UNSAFE_TEXT = re.compile('[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]')
-HOSTED_FOLDER = re.compile(r'(report|file-changes|changes|summary)-\d{8}-\d{6}-[0-9a-f]{8}')
+HOSTED_FOLDER = re.compile(r'(report|file-changes|changes|summary|timeline|vulns|checklist)-\d{8}-\d{6}-[0-9a-f]{8}')
 
 class AlertError(Exception):
     """A channel failed. The text never contains addresses, passwords or webhook URLs."""

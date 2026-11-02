@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.23.0-rc1 - BATCH QUARANTINE
+WORDPRESS SENTINEL 0.24.0-rc1 - BATCH QUARANTINE
 
 Move hundreds of reviewed files out of a site in one step, and put them back if
 you need to. You still make the decisions: Sentinel writes a list, you check it,

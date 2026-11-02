@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.23.0-rc1 - SCANNING A WHOLE ACCOUNT
+WORDPRESS SENTINEL 0.24.0-rc1 - SCANNING A WHOLE ACCOUNT
 
 Infections often return from a neighbouring site: an old staging copy, a forgotten
 addon domain or a backup folder that still runs. sentinel-remote.py can find every

@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.23.0-rc1 — INSTALLATION AND ROUTINE USE
+WORDPRESS SENTINEL 0.24.0-rc1 — INSTALLATION AND ROUTINE USE
 
 BACK UP YOUR SITE FIRST, IF AT ALL POSSIBLE. Keep the backup away from the website.
 This is new software with no guarantees. Scanning does not change your site, but

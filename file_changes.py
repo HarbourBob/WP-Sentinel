@@ -89,10 +89,11 @@ def compare(before, after, root):
         else:
             category = 'unknown'
             reason = 'Skipped, excluded, changed type, or absent from an incomplete traversal; content comparison unavailable.'
-        groups[category].append(dict(path=path, before=a, after=b, reason=reason))
+        # Unchanged files are most of a site, and both inventories already hold their details, so only the path is kept.
+        groups[category].append(path if category == 'unchanged' else dict(path=path, before=a, after=b, reason=reason))
     coverage = lambda v: {k: v.get(k) for k in ('started_utc','finished_utc','traversal_complete','uninspected_directories','file_limit_reached','max_bytes','max_files','skipped_counts','limitations')}
     return dict(format='sentinel-file-changes-1', site_root=str(root), created_utc=m.now(),
-                note='Read-only comparison of saved file observations, not a clean baseline or malware verdict. Added/missing reflect directory observations during sequential live scans, not atomic snapshots. Added and missing require that the relevant scan could see that path; skipped directories only affect paths inside them. No files are modified. Reviews of findings are not applied to this inventory.',
+                note='Read-only comparison of saved file observations, not a clean baseline or malware verdict. Added/missing reflect directory observations during sequential live scans, not atomic snapshots. Added and missing require that the relevant scan could see that path; skipped directories only affect paths inside them. No files are modified. Reviews of findings are not applied to this inventory. Unchanged files are listed by path only; their hashes are in both inventories.',
                 before=coverage(before), after=coverage(after), counts={k:len(v) for k,v in groups.items()}, groups=groups)
 
 def main():

@@ -92,6 +92,10 @@ hosts, its permissions (mode, such as 0644), owner (uid, gid) and status-change 
 (ctime_utc). owner_names maps each uid to its account name. metadata_fields lists
 what was recorded. Times are UTC and taken from the same file reads as the hashes.
 
+The unchanged group lists paths only, as plain strings, to keep comparisons small;
+both inventories still hold every unchanged file's hash, size and dates. Comparisons
+made before this update listed full entries there too.
+
 file-changes adds a permissions_changed group: entries whose mode or owner differ
 between the two inventories, whether or not the content changed. It is listed
 alongside the content result, so a file can appear in both. Inventories made before

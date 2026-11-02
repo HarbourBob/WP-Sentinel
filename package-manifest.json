@@ -60,12 +60,12 @@
       "sha256": "bd54ddc5bfd3a615f738776f5e28c3633031526a6465319fc996dbbe5e9f0f61"
     },
     "documentation/FILE-INVENTORY.txt": {
-      "bytes": 7835,
-      "sha256": "f084227fb29f7bff64e79fd536af0a10278f51ff8e794e459f89a236fdbe8c9b"
+      "bytes": 8059,
+      "sha256": "033d564d84367d370fda9ab21a11c0ad115b5bb8fc5ceaf597d91b4d14e5fb1a"
     },
     "documentation/INSTALL.txt": {
-      "bytes": 4658,
-      "sha256": "6738ac22a4cb25efe76a31ced93754744fc62d6560f837c6121704bff498fe93"
+      "bytes": 4461,
+      "sha256": "a437617b83630d9c9e3738cd32c6e546be9c7561c3692c916c62b810e63dfc6a"
     },
     "documentation/MANAGEMENT.txt": {
       "bytes": 4772,
@@ -88,8 +88,8 @@
       "sha256": "a9270317881f73b0291dcda5a4fe86c70301688cbbc0953fb8e9b1c2a6a37848"
     },
     "documentation/README.txt": {
-      "bytes": 7017,
-      "sha256": "fb0da9f6bbd09a32f4dd8c70e8de7384ddc373a70416bf3adf539654789bc503"
+      "bytes": 6618,
+      "sha256": "52d6ec4426459932cc13962a3788820e19d715b076f7d2410ebfb6eba95508fe"
     },
     "documentation/REMOTE.txt": {
       "bytes": 5254,
@@ -104,8 +104,8 @@
       "sha256": "dda64b4ddbc49c8ef18cef06d6abd7ce288a0a5b89d8c27d65d7c8ec810fb67a"
     },
     "file_changes.py": {
-      "bytes": 8181,
-      "sha256": "82ee1ea69aafe3d7cb0e09bf6d97839a8ad55dca6491d3f131c46256dbafd144"
+      "bytes": 8418,
+      "sha256": "bcead15431968213a4a26a083cffd3bbc230a2805e0c82b746101b4db1256da7"
     },
     "manage.py": {
       "bytes": 25285,

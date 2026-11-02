@@ -2,14 +2,6 @@ WORDPRESS SENTINEL 0.24.0-rc1
 
 BACK UP YOUR SITE FIRST, IF AT ALL POSSIBLE. Keep the backup away from the website.
 
-STATUS: NEW AND LARGELY UNTESTED, WITH NO GUARANTEES
-
-This is new software, offered for testing under the MIT licence, with no warranty. It
-may not work on your host, it may miss malware, and it may flag innocent files. It
-has been run on one real site. How much real malware the rules catch has not been
-measured. Try it on a staging copy before relying on it. Improvements and forks are
-welcome.
-
 Sentinel scans a WordPress site and its database for signs of compromise over
 SSH, and can move reviewed files into a private quarantine. It uses only the
 Python standard library, plus PHP CLI for database checks. It never loads

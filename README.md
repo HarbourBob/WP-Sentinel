@@ -6,7 +6,7 @@ WP Sentinel scans a WordPress site and its database over SSH for signs of compro
 helps you deal with what it finds. It produces a report you can read in a browser, and it
 can move reviewed files into a private quarantine or swap them for verified clean copies.
 
-Current release: **0.23.0-rc1**
+Current release: **0.24.0-rc1**
 
 ## What it does
 

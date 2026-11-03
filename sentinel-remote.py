@@ -151,9 +151,20 @@ def write_chain(chain_path, chain):
     pending.write_text(json.dumps(chain, indent=2), encoding='utf-8')
     os.replace(pending, chain_path)
 
-def verify_chain(site_dir):
-    """Check every sealed run against the chain. Returns a list of problems."""
-    chain = json.loads((site_dir / 'chain.json').read_text(encoding='utf-8'))
+def changed_files(run_dir, record):
+    """Files a run's EVIDENCE.json lists that are missing or no longer match."""
+    problems = []
+    for name, digest in record.get('files', {}).items():
+        path = run_dir / name
+        if not path.is_file():
+            problems.append(f'{run_dir.name}: {name} is missing')
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            problems.append(f'{run_dir.name}: {name} has changed since it was sealed')
+    return problems
+
+def verify_chain(site_dir, chain_name='chain.json'):
+    """Check every sealed run against one chain file. Returns the problems, the run count and the runs it covers."""
+    chain = json.loads((site_dir / chain_name).read_text(encoding='utf-8'))
     problems, previous = [], None
     for entry in chain['runs']:
         run_dir = site_dir / entry['run']
@@ -173,13 +184,25 @@ def verify_chain(site_dir):
         if record.get('previous_seal') != previous:
             problems.append(entry['run'] + ': link to the previous run is wrong')
         previous = entry['seal']
-        for name, digest in record.get('files', {}).items():
-            path = run_dir / name
-            if not path.is_file():
-                problems.append(f'{entry["run"]}: {name} is missing')
-            elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                problems.append(f'{entry["run"]}: {name} has changed since it was sealed')
-    return problems, len(chain['runs'])
+        problems += changed_files(run_dir, record)
+    return problems, len(chain['runs']), {entry['run'] for entry in chain['runs']}
+
+def uncovered_runs(site_dir, covered):
+    """Run folders that no chain lists, such as runs sealed into a chain.json that was later replaced."""
+    notes = []
+    for run_dir in sorted(p for p in site_dir.iterdir() if p.is_dir() and not p.is_symlink() and RUN_FOLDER.fullmatch(p.name) and p.name not in covered):
+        try:
+            record = json.loads((run_dir / 'EVIDENCE.json').read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            notes.append(run_dir.name + ': never sealed, usually a scan that stopped early')
+            continue
+        except (OSError, ValueError) as error:
+            notes.append(run_dir.name + ': EVIDENCE.json could not be read: ' + type(error).__name__)
+            continue
+        changed = changed_files(run_dir, record)
+        # Its own record can still be checked, but nothing proves the record itself is the original.
+        notes.append(run_dir.name + ': sealed, but not in any chain file here' + ('; ' + '; '.join(c.split(': ', 1)[1] for c in changed) if changed else '; its files match its own EVIDENCE.json'))
+    return notes
 
 def prune_site(site_dir, keep, apply):
     """Keep the first run and the newest runs. The chain records what was removed, and when."""
@@ -191,7 +214,9 @@ def prune_site(site_dir, keep, apply):
     oldest_kept = live[-keep]['run'] if len(live) >= keep else ''
     sealed = {entry['run'] for entry in chain['runs']}
     # Folders never sealed come from scans that failed; old ones hold nothing to check.
-    unsealed = [p for p in site_dir.iterdir() if p.is_dir() and not p.is_symlink() and RUN_FOLDER.fullmatch(p.name) and p.name not in sealed and p.name < oldest_kept]
+    # A folder with its own EVIDENCE.json was sealed into another chain, so it is kept.
+    unsealed = [p for p in site_dir.iterdir() if p.is_dir() and not p.is_symlink() and RUN_FOLDER.fullmatch(p.name) and p.name not in sealed
+                and p.name < oldest_kept and not (p / 'EVIDENCE.json').exists()]
     names = sorted([entry['run'] for entry in remove] + [p.name for p in unsealed])
     if not all(RUN_FOLDER.fullmatch(str(name)) for name in names):
         raise ValueError('Unexpected run name in chain.json; nothing was removed.')
@@ -706,14 +731,25 @@ def verify(args):
         print('No sealed evidence found in ' + str(evidence))
         return 2
     for site_dir in sites:
-        try:
-            problems, runs = verify_chain(site_dir)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            problems, runs = ['chain.json could not be read: ' + type(error).__name__], 0
-        print(f'{site_dir.name}: {runs} runs, ' + ('all match' if not problems else f'{len(problems)} problems'))
-        for problem in problems:
-            print('  ' + problem)
-            status = 1
+        covered = set()
+        # chain.json is the live chain. Earlier chains kept alongside it, such as chain-2026-11-02.json, are checked too.
+        for chain_path in [site_dir / 'chain.json'] + sorted(p for p in site_dir.glob('chain-*.json') if re.fullmatch(r'chain-[A-Za-z0-9._-]{1,60}\.json', p.name)):
+            try:
+                problems, runs, runs_covered = verify_chain(site_dir, chain_path.name)
+                covered |= runs_covered
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                problems, runs = [chain_path.name + ' could not be read: ' + type(error).__name__], 0
+            label = site_dir.name + ('' if chain_path.name == 'chain.json' else ' (' + chain_path.name + ')')
+            print(f'{label}: {runs} runs, ' + ('all match' if not problems else f'{len(problems)} problems'))
+            for problem in problems:
+                print('  ' + problem)
+                status = 1
+        notes = uncovered_runs(site_dir, covered)
+        if notes:
+            # Not counted as problems: these runs have no chain to check against, which is a gap, not a mismatch.
+            print(f'  {len(notes)} run folders not covered by a chain:')
+            for note in notes:
+                print('    ' + note)
     return status
 
 def parser():
@@ -776,9 +812,25 @@ def parser():
     c.add_argument('--site-name', default='test')
     return p
 
+def elevated():
+    """Whether this is a Windows administrator window, whose new folders the normal account cannot open."""
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (OSError, AttributeError):
+        return False
+
+ADMIN_WARNING = ('WARNING: this window is running as administrator. Evidence folders made from here can only be opened '
+                 'from administrator windows, so reports may show as blank pages. Use a normal PowerShell window. '
+                 'See "RUN AS ADMINISTRATOR" in REMOTE.txt to unlock folders already made.')
+
 def main(argv=None):
     args = parser().parse_args(argv)
     os.umask(0o077)
+    if args.action in ('scan', 'scan-all', 'checklist') and elevated():
+        print(ADMIN_WARNING, file=sys.stderr, flush=True)
     if getattr(args, 'start', False) is None:
         args.start = ['~']
     try:

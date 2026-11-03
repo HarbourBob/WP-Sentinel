@@ -61,6 +61,17 @@ python sentinel-remote.py verify
 Exit codes for scan are those of the scanner, listed in RULES.txt. For verify: 0 all
 match, 1 something differs, 2 no evidence found.
 
+verify also lists run folders that chain.json does not cover:
+- "never sealed": a scan that stopped early. prune removes old ones.
+- "sealed, but not in any chain file here": the run has its own EVIDENCE.json but no
+  chain lists it. This happens when two copies of the evidence folder are merged and
+  one chain.json replaces the other. Its files are still checked against its own
+  EVIDENCE.json, but nothing proves that record is the original. If you still have the
+  other chain.json, copy it into the site's folder under a new name starting chain-,
+  such as chain-2026-11-02.json, and verify checks those runs against it too. Never
+  overwrite chain.json with it. prune never removes these runs.
+These are listed as gaps, not problems, so they do not change the exit code.
+
 LIMITS: WHAT THIS DOES NOT PROVE
 
 - A compromised host can still lie. It controls the python3 that runs the scan and
@@ -97,6 +108,18 @@ python sentinel-remote.py discover --host user@example.com --port 18765 --identi
 Test the login on its own first. This should print the host's folder and nothing else:
 
 ssh -p 18765 -i PATH-TO-PRIVATE-KEY user@example.com pwd
+
+RUN AS ADMINISTRATOR
+
+On Windows, use a normal PowerShell window, not one opened with "Run as administrator".
+Evidence folders made from an administrator window belong to the Administrators group,
+so your normal account and your browser cannot open them: reports show as blank pages,
+and verify says access is denied. Sentinel warns when it is started that way.
+
+To unlock folders already made, run this once from an administrator window, in the
+folder holding sentinel-evidence, then go back to a normal window:
+
+icacls sentinel-evidence /grant "${env:USERNAME}:(OI)(CI)F" /T
 
 TESTING STATUS
 

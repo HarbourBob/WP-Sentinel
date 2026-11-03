@@ -83,6 +83,8 @@ Every action below previews first and needs `--apply` to make a change.
 
 - **From your own computer:** `sentinel-remote.py` works over SSH, removes the program from
   the host after each run, and keeps the evidence off the host.
+- **From a window (prototype):** `sentinel-app.py` runs the same scan without the command
+  line: fill in the SSH details, test the connection, scan, and open the results.
 - **Whole account:** `discover` finds every WordPress install. `scan-all` scans each one,
   with a summary page and one combined alert, and reports installs that appear or
   disappear.

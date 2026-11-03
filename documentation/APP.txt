@@ -1,0 +1,81 @@
+WORDPRESS SENTINEL 0.24.0-rc1 — SCANNING FROM A WINDOW (PROTOTYPE)
+
+sentinel-app.py is a window for sentinel-remote.py. You fill in your site's SSH details
+once, press Scan, and the report opens in your browser. It runs exactly the same scan as
+the command line, over SSH from your computer, and keeps the sealed evidence on your
+computer. Nothing is installed on the website. See REMOTE.txt for how that works.
+
+WHAT YOU NEED
+
+- Python 3 on your computer, from python.org. Tick "tcl/tk" during installation; it is
+  ticked by default.
+- SSH turned on for your hosting account, with a key. Your host's control panel has an SSH
+  page that shows your username, server and port, and lets you create or upload a key.
+  On SiteGround: Site Tools > Devs > SSH Keys Manager. Create a key, set a passphrase, and
+  use Actions > Private Key to save it, such as into the .ssh folder in your user folder.
+- Your site's folder on the server, such as /home/customer/www/example.com/public_html.
+  Hosts show this in their file manager.
+
+STARTING IT
+
+Double-click sentinel-app.py, or run:
+
+  python sentinel-app.py
+
+Your entries, apart from any passphrase, are remembered in .wp-sentinel-app.json in your
+user folder. Only file locations and names are kept there, never keys or passphrases.
+
+FIRST TIME
+
+1. Fill in the SSH username, server, port, private key file and site folder.
+2. If your key has a passphrase, press Unlock key. A small window opens; type the
+   passphrase there. Nothing shows as you type. This lasts until you restart the
+   computer.
+3. Press Test connection. The first time, it asks you to confirm the server: a window
+   shows its fingerprint. If your host publishes its fingerprint, check they match, then
+   type yes. After that, Test connection should say "Connected. Ready to scan."
+4. Press Scan. A scan takes a few minutes. Progress shows in the window, and the report
+   opens when it is finished.
+
+AFTER A SCAN
+
+The Latest scan buttons open the report, the timeline, the vulnerability check and the
+post-incident checklist for the newest finished scan of the site that is filled in. Check
+saved evidence confirms that no saved scan has changed since it was sealed.
+
+The vulnerability check needs a Wordfence key file; see VULNERABILITIES.txt. The database
+check reads the database details from wp-config.php on the server; see REMOTE.txt.
+
+UNLOCKING YOUR KEY
+
+Unlock key uses Windows' OpenSSH Authentication Agent. If the window says the agent is not
+running, it needs turning on once, from a PowerShell window opened as administrator:
+
+  Get-Service ssh-agent | Set-Service -StartupType Automatic
+  Start-Service ssh-agent
+
+Close that administrator window afterwards. Start WP Sentinel itself from a normal
+window: scans made from an administrator window open as blank pages, and the app warns
+you if you try. See "RUN AS ADMINISTRATOR" in REMOTE.txt.
+
+A key without a passphrase does not need unlocking, but anyone who copies that file can
+log in to your hosting account, so a passphrase is better.
+
+IF IT GOES WRONG
+
+"has not met this server before"  Confirm the server, as in step 3.
+"refused the login"               Wrong username or key, or the key is locked: press
+                                  Unlock key.
+"Could not connect", or no answer Check the server name and the port. SSH is usually not
+after 60 seconds                  port 21, which is FTP. SiteGround uses 18765.
+Stop during a scan                The temporary .sentinel-run- folder may be left in your
+                                  home folder on the server; delete it.
+
+LIMITS OF THIS PROTOTYPE
+
+It covers scanning one site, checking evidence and opening the results. Scanning every
+site on an account, quarantine, clean replacement, alerts and scheduled runs still use the
+command line. Scans run with --unattended, so they never stop to ask a question; the
+database check therefore always reads wp-config.php instead of prompting. On Mac and Linux
+the window works, but Unlock key and confirming the server show a command to run in a
+terminal instead.

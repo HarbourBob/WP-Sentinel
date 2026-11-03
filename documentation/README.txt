@@ -19,6 +19,7 @@ WHERE TO START
 
   INSTALL.txt             Install on a host and run your first scan.
   REMOTE.txt              Run from your own computer and keep evidence off the host.
+  APP.txt                 Scan from a window instead of the command line (prototype).
   ACCOUNT.txt             Find and scan every WordPress install on an account.
   MONITORING.txt          Scheduled checks, email and webhook alerts, old report cleanup.
   RULES.txt               What the scanner looks for and how to read findings.

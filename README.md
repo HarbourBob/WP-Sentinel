@@ -103,6 +103,9 @@ python sentinel-remote.py scan --host user@example.com --root /home/user/public_
 
 [REMOTE.txt](documentation/REMOTE.txt) covers SSH ports, keys and database checks.
 
+Prefer not to type commands? `python sentinel-app.py` opens a window that runs the same
+scan. See [APP.txt](documentation/APP.txt). It is a prototype.
+
 ## Guides
 
 All guides are in the [documentation](documentation) folder.
@@ -111,6 +114,7 @@ All guides are in the [documentation](documentation) folder.
 | --- | --- |
 | [INSTALL](documentation/INSTALL.txt) | Install on a host and run your first scan. |
 | [REMOTE](documentation/REMOTE.txt) | Run from your own computer and keep evidence off the host. |
+| [APP](documentation/APP.txt) | Scan from a window instead of the command line (prototype). |
 | [ACCOUNT](documentation/ACCOUNT.txt) | Find and scan every WordPress install on an account. |
 | [MONITORING](documentation/MONITORING.txt) | Scheduled checks, email and webhook alerts, old report cleanup. |
 | [RULES](documentation/RULES.txt) | What the scanner looks for and how to read findings. |

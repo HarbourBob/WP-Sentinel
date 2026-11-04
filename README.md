@@ -8,17 +8,6 @@ can move reviewed files into a private quarantine or swap them for verified clea
 
 Current release: **0.24.0-rc1**
 
-## Status: new and largely untested, with no guarantees
-
-This is new software, offered for testing under the [MIT licence](LICENSE), with no
-warranty. It may not work on your host, it may miss malware, and it may flag innocent
-files. It has been run on one real site. How much real malware the rules catch has not
-been measured. Try it on a staging copy before relying on it.
-
-A report with no findings does not mean there is no malware.
-
-Testers and developers are welcome. See [Contributing](#contributing).
-
 ## What it does
 
 - **Scans files** for malicious patterns and for PHP in places it should not be.

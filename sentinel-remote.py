@@ -42,12 +42,12 @@ AGENT_RECEIVE = "import sys,tarfile;t=tarfile.open(fileobj=sys.stdin.buffer,mode
 AGENT_HASH = "import hashlib,json,os,sys;d=sys.argv[1];print(json.dumps({n:hashlib.sha256(open(os.path.join(d,n),'rb').read()).hexdigest() for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d,n))}))"
 AGENT_SEND = "import sys,tarfile;t=tarfile.open(fileobj=sys.stdout.buffer,mode='w|');t.add(sys.argv[1],arcname='report');t.close()"
 AGENT_REMOVE = "import os,re,shutil,sys;p=sys.argv[1];assert re.fullmatch(r'\\.sentinel-run-[A-Za-z0-9_]{6,}',os.path.basename(p)) and not os.path.islink(p);shutil.rmtree(p)"
-AGENT_PRIVATE = "import os,sys;os.umask(0o077);p=os.path.abspath(os.path.expanduser(sys.argv[1]));os.makedirs(p,0o700,exist_ok=True);assert not os.path.islink(p);os.chmod(p,0o700);print(os.path.realpath(p))"
-AGENT_PUT_PLAN = "import os,re,sys;d=sys.argv[1];assert re.fullmatch(r'batch-\\d{8}T\\d{6}Z-[0-9a-f]{6}',os.path.basename(d)) and os.path.isdir(d) and not os.path.islink(d);t=os.path.join(d,'plan.txt.tmp');f=open(t,'wb');f.write(sys.stdin.buffer.read());f.close();os.replace(t,os.path.join(d,'plan.txt'))"
-QUARANTINE_FILES = ('batch.py', 'quarantine.py', 'manage.py')
-BATCH_NAME = re.compile(r'batch-\d{8}T\d{6}Z-[0-9a-f]{6}')
-PLAN_FORMAT = '# sentinel-quarantine-plan-1'
-MAX_ONLY = 200
+# Only the plain files at the top of a list's folder: its clean copies stay on the host.
+AGENT_SEND_FILES = "import os,sys,tarfile;d=sys.argv[1];t=tarfile.open(fileobj=sys.stdout.buffer,mode='w|');[t.add(os.path.join(d,n),arcname='report/'+n) for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d,n)) and not os.path.islink(os.path.join(d,n))];t.close()"
+# Unpacks your review records, sent as one file, into a folder the list programs can read.
+AGENT_REVIEWS = "import json,os,sys;d=sys.argv[1];r=os.path.join(d,'reviews');os.mkdir(r,0o700);[open(os.path.join(r,'%d.json'%i),'w').write(json.dumps(x)) for i,x in enumerate(json.load(open(os.path.join(d,'reviews.json'))))]"
+AGENT_PRIVATE ="import os,sys;os.umask(0o077);p=os.path.abspath(os.path.expanduser(sys.argv[1]));os.makedirs(p,0o700,exist_ok=True);assert not os.path.islink(p);os.chmod(p,0o700);print(os.path.realpath(p))"
+AGENT_PUT_PLAN = "import os,re,sys;d=sys.argv[1];assert re.fullmatch(r'(batch|replace)-\\d{8}T\\d{6}Z-[0-9a-f]{6}',os.path.basename(d)) and os.path.isdir(d) and not os.path.islink(d);t=os.path.join(d,'plan.txt.tmp');f=open(t,'wb');f.write(sys.stdin.buffer.read());f.close();os.replace(t,os.path.join(d,'plan.txt'))"
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc)
@@ -369,28 +369,57 @@ def make_checklist(args):
     print('Checklist: ' + str(output / 'checklist.html'))
     return 0
 
-# Quarantine. The files and their store are on the host, so moving them happens there. Each step
-# uploads the quarantine programs for that step only, and brings the list and its receipt back here.
+# Quarantine and clean copies. The files and their store are on the host, so changes happen there. Each
+# step uploads the programs for that step only, and brings the list and its receipt back here.
+
+HEX = re.compile('[a-fA-F0-9]{64}')
+LIST_NAME = re.compile(r'(batch|replace)-\d{8}T\d{6}Z-[0-9a-f]{6}')
+MAX_ONLY = 200
+# Each kind of list: its folder name here, its program on the host, and the words used for it.
+KINDS = {
+    'quarantine': dict(prefix='batch', folder='quarantine', program='batch.py', files=('batch.py', 'quarantine.py', 'manage.py'),
+                       format='# sentinel-quarantine-plan-1', make='quarantine-plan', apply='quarantine', undo='restore'),
+    'replace': dict(prefix='replace', folder='clean-copies', program='replace.py', files=('replace.py', 'sentinel.py', 'batch.py', 'quarantine.py', 'manage.py'),
+                    format='# sentinel-replace-plan-1', make='replace-plan', apply='replace', undo='replace-undo'),
+}
+# Each command: the kind of list, and the action name batch.py or replace.py uses for it.
+STEPS = {'quarantine': ('quarantine', 'quarantine'), 'restore': ('quarantine', 'restore'), 'replace': ('replace', 'apply'), 'replace-undo': ('replace', 'undo')}
 
 def clean(value, limit=300):
     return CONTROL_TEXT.sub('?', str(value))[:limit]
+
+def entry_parts(line):
+    """A plan line's columns if it names a file, ticked or not: four in a quarantine plan, five in a replacement plan."""
+    parts = line.lstrip('#').lstrip(' ').split('\t')
+    if len(parts) == 4 and HEX.fullmatch(parts[0]):
+        return parts
+    if len(parts) == 5 and HEX.fullmatch(parts[1]) and (parts[0] == 'missing' or HEX.fullmatch(parts[0])):
+        return parts
+    return None
 
 def plan_entries(text):
     """The files in a plan, with whether each is ticked. A line starting with # is left alone."""
     entries = []
     for line in text.splitlines():
-        parts = line.lstrip('#').lstrip(' ').split('\t')
-        if len(parts) == 4 and re.fullmatch('[a-fA-F0-9]{64}', parts[0]):
+        parts = entry_parts(line)
+        if parts and len(parts) == 4:
             entries.append({'ticked': not line.startswith('#'), 'sha256': parts[0].lower(), 'priority': parts[1], 'rules': parts[2], 'path': parts[3]})
+        elif parts:
+            entries.append({'ticked': not line.startswith('#'), 'sha256': parts[0].lower(), 'clean_sha256': parts[1].lower(), 'source': parts[2],
+                            'rules': parts[3], 'path': parts[4], 'priority': ''})
     return entries
 
+def plan_sources(text):
+    """The '# source:' lines of a replacement plan: where each clean copy comes from."""
+    return [line[len('# source: '):] for line in text.splitlines() if line.startswith('# source: ')]
+
 def tick(text, chosen):
-    """The plan with only the files in chosen left to move. The rest become # lines, so they can be ticked again."""
+    """The plan with only the files in chosen left in. The rest become # lines, so they can be ticked again."""
     lines = []
     for line in text.splitlines():
-        parts = line.lstrip('#').lstrip(' ').split('\t')
-        if len(parts) == 4 and re.fullmatch('[a-fA-F0-9]{64}', parts[0]):
-            line = ('' if parts[3] in chosen else '#') + '\t'.join(parts)
+        parts = entry_parts(line)
+        if parts:
+            line = ('' if parts[-1] in chosen else '#') + '\t'.join(parts)
         lines.append(line)
     return '\n'.join(lines) + '\n'
 
@@ -406,19 +435,19 @@ def receipt_events(text):
             events.append(event)
     return events
 
-def quarantined_now(events):
-    """Files a list has moved and not put back, as batch.py's restore sees them."""
+def active_files(events):
+    """Files a list has moved or replaced and not yet undone, as batch.py and replace.py see them."""
     current = {}
     for event in events:
-        if event['event'] == 'quarantined':
+        if event['event'] in ('quarantined', 'replaced'):
             current[event['path']] = event
-        elif event['event'] == 'restored':
+        elif event['event'] in ('restored', 'undone'):
             current.pop(event['path'], None)
     return list(current.values())
 
 def file_states(events):
     """The latest thing that happened to each file in a list."""
-    names = {'quarantined': 'moved', 'restored': 'put back', 'failed': 'failed'}
+    names = {'quarantined': 'moved', 'restored': 'put back', 'replaced': 'swapped', 'undone': 'changed back', 'failed': 'failed'}
     return {event['path']: names.get(event['event'], clean(event['event'], 20)) for event in events}
 
 def batch_files(folder):
@@ -442,25 +471,27 @@ def private_folder(host, args):
         raise ValueError('--private-dir must be outside the website, such as ~/wp-sentinel-private.')
     return path
 
-def load_batch(args):
+def load_batch(args, kind):
     """The list folder named by --plan, checked against --host and --root."""
     folder = Path(os.path.abspath(args.plan))
     if folder.name == 'plan.txt':
         folder = folder.parent
+    made_by = KINDS[kind]['make']
     try:
         meta = json.loads((folder / 'batch.json').read_text(encoding='utf-8'))
         remote_folder = str(meta['remote_folder'])
     except (OSError, ValueError, KeyError, TypeError):
-        raise ValueError('--plan must be a list folder made by quarantine-plan, holding batch.json and plan.txt.') from None
-    if not BATCH_NAME.fullmatch(folder.name) or folder.parent.name != 'quarantine' or meta.get('format') != 'sentinel-remote-batch-1' \
-            or not valid_host_folder(remote_folder) or not BATCH_NAME.fullmatch(remote_folder.rsplit('/', 1)[-1]):
-        raise ValueError('The folder ' + str(folder) + ' is not a list made by quarantine-plan.')
+        raise ValueError(f'--plan must be a list folder made by {made_by}, holding batch.json and plan.txt.') from None
+    if not LIST_NAME.fullmatch(folder.name) or not folder.name.startswith(KINDS[kind]['prefix'] + '-') or folder.parent.name != KINDS[kind]['folder'] \
+            or meta.get('format') != 'sentinel-remote-batch-1' or meta.get('kind', 'quarantine') != kind \
+            or not valid_host_folder(remote_folder) or remote_folder.rsplit('/', 1)[-1] != folder.name:
+        raise ValueError(f'The folder {folder} is not a list made by {made_by}.')
     if meta.get('host') != args.host or meta.get('root') != args.root:
         raise ValueError('This list is for ' + clean(meta.get('host')) + ' ' + clean(meta.get('root')) + ', not the --host and --root given.')
     return folder, remote_folder
 
 def clean_answer(data):
-    """Keep only the counts, hashes and short messages expected from batch.py. The host is untrusted."""
+    """Keep only the counts, hashes and short messages expected from batch.py or replace.py. The host is untrusted."""
     if not isinstance(data, dict) or not isinstance(data.get('status'), str):
         raise RuntimeError('The host sent an answer that could not be read.')
     result = {}
@@ -477,9 +508,9 @@ def clean_answer(data):
             result[key] = {clean(name, 120): count for name, count in list(value.items())[:50] if isinstance(count, int) and not isinstance(count, bool)}
     return result
 
-def run_batch(host, run_path, action, tail):
-    """Run batch.py on the host and return its exit code and checked answer."""
-    result = host.answer([host.python, '-B', '-I', '-S', run_path + '/batch.py', action] + tail, timeout=3600)
+def run_batch(host, run_path, program, action, tail):
+    """Run batch.py or replace.py on the host and return its exit code and checked answer."""
+    result = host.answer([host.python, '-B', '-I', '-S', run_path + '/' + program, action] + tail, timeout=3600)
     if result.returncode == 2:
         lines = [clean(line.strip()) for line in result.stderr.decode('utf-8', 'replace').splitlines() if line.strip()]
         raise RuntimeError('On the host: ' + (re.sub('^Stopped: ', '', lines[0]) if lines else 'no reason was given.'))
@@ -491,11 +522,11 @@ def run_batch(host, run_path, action, tail):
         raise RuntimeError('The host sent an answer that could not be read.') from None
 
 def sync_receipt(host, remote_folder, folder, plan):
-    """Bring back the host's receipt, which records every file moved or put back."""
+    """Bring back the host's receipt, which records every file changed or undone."""
     incoming = folder / ('.incoming-' + os.urandom(4).hex())
     incoming.mkdir(mode=0o700)
     try:
-        pull_folder(host, remote_folder, incoming)
+        pull_folder(host, remote_folder, incoming, AGENT_SEND_FILES)
         if not (incoming / 'plan.txt').is_file() or (incoming / 'plan.txt').read_bytes() != plan:
             print('WARNING: the list on the host differs from the one sent. The host may be altering files.', file=sys.stderr, flush=True)
         if (incoming / 'receipt.jsonl').is_file():
@@ -507,55 +538,90 @@ def next_command(args, action, folder, *more):
     connection = ['--host', args.host] + (['--port', str(args.port)] if args.port else []) + (['--identity', str(args.identity)] if args.identity else [])
     return shlex.join(['python', 'sentinel-remote.py', action] + connection + ['--root', args.root, '--plan', str(folder), *more])
 
-def quarantine_plan(args):
-    """Make a list of files to move from one saved scan. Nothing on the website changes."""
-    run_dir = Path(os.path.abspath(args.run))
-    site_dir = run_dir.parent
+def sealed_run(path):
+    """A run folder whose report is sealed and unchanged since, so it can be acted on."""
+    run_dir = Path(os.path.abspath(path))
     if not RUN_FOLDER.fullmatch(run_dir.name) or not (run_dir / 'report.json').is_file():
         raise ValueError('--run must be a run folder holding report.json, such as sentinel-evidence/SITE/20261101T204908Z-c29d80')
-    if site_dir != site_directory(site_dir.parent, args.host, args.root):
-        raise ValueError('That scan is of another site, or of another --host or --root.')
     try:
         record = json.loads((run_dir / 'EVIDENCE.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
-        raise ValueError('That scan was never sealed, so it cannot be used for a list. Scan again.') from None
+        raise ValueError('That scan was never sealed, so it cannot be used for this. Scan again.') from None
     changed = changed_files(run_dir, record)
     if changed or 'report.json' not in record.get('files', {}):
-        raise ValueError('That scan has changed since it was sealed, so it cannot be used for a list. ' + '; '.join(changed[:3]))
+        raise ValueError('That scan has changed since it was sealed, so it cannot be used for this. ' + '; '.join(changed[:3]))
+    return run_dir
+
+def make_list(args, kind):
+    """Make a list from one saved scan: files to move out, or to swap for clean copies. Nothing on the website changes."""
+    run_dir = sealed_run(args.run)
+    site_dir = run_dir.parent
+    if site_dir != site_directory(site_dir.parent, args.host, args.root):
+        raise ValueError('That scan is of another site, or of another --host or --root.')
+    reviews = review_records_for(read_report(run_dir), site_dir)
+    spec = KINDS[kind]
     host = Host(args)
-    name = 'batch-' + now().strftime('%Y%m%dT%H%M%SZ') + '-' + os.urandom(3).hex()
-    folder = site_dir / 'quarantine' / name
+    name = spec['prefix'] + '-' + now().strftime('%Y%m%dT%H%M%SZ') + '-' + os.urandom(3).hex()
+    folder = site_dir / spec['folder'] / name
     with run_lock(site_dir):
         remote_folder = private_folder(host, args) + '/' + name
-        with host_folder(host, args, QUARANTINE_FILES, {'report.json': run_dir / 'report.json'}) as (run_path, _):
-            print('Making the list on the host. Nothing on the website changes.', flush=True)
-            tail = ['--root', args.root, '--report', run_path + '/report.json', '--output', remote_folder, '--priority', args.priority]
-            _, answer = run_batch(host, run_path, 'plan', tail + (['--include-critical'] if args.include_critical else []))
-            folder.mkdir(parents=True, mode=0o700)
-            pull_folder(host, remote_folder, folder)
-        if not (folder / 'plan.txt').is_file() or not (folder / 'plan.txt').read_bytes().startswith(PLAN_FORMAT.encode()):
-            raise RuntimeError('The host sent back something that is not a quarantine list.')
-        (folder / 'batch.json').write_text(json.dumps({'format': 'sentinel-remote-batch-1', 'host': args.host, 'root': args.root, 'remote_folder': remote_folder,
-                                                       'run': run_dir.name, 'priority': args.priority, 'include_critical': args.include_critical,
-                                                       'created_utc': now().isoformat()}, indent=2), encoding='utf-8')
-    entries = plan_entries((folder / 'plan.txt').read_text(encoding='utf-8', errors='replace'))
-    counts = {level: sum(entry['priority'] == level for entry in entries) for level in ('high', 'medium', 'review')}
-    print(f'Made a list of {len(entries)} files to move out of the website: ' + ', '.join(f'{count} {level}' for level, count in counts.items() if count) + '.' if entries else 'No files qualify for the list.')
+        extra = {'report.json': run_dir / 'report.json'}
+        if reviews:
+            bundle = site_dir / ('.reviews-' + os.urandom(4).hex() + '.json')
+            bundle.write_text(json.dumps(reviews), encoding='utf-8')
+            extra['reviews.json'] = bundle
+        try:
+            with host_folder(host, args, spec['files'], extra) as (run_path, _):
+                tail = ['--root', args.root, '--report', run_path + '/report.json', '--output', remote_folder]
+                if reviews:
+                    # Files you reviewed as harmless are left out of the list, as with a hosted install.
+                    host.capture(host.agent(AGENT_REVIEWS, run_path))
+                    tail += ['--reviews', run_path + '/reviews']
+                if kind == 'quarantine':
+                    print('Making the list on the host. Nothing on the website changes.', flush=True)
+                    tail += ['--priority', args.priority] + (['--include-critical'] if args.include_critical else [])
+                else:
+                    print('Downloading and checking clean copies on the host. Nothing on the website changes.', flush=True)
+                    tail += ['--locale', args.locale] + (['--core-version', args.core_version] if args.core_version else [])
+                _, answer = run_batch(host, run_path, spec['program'], 'plan', tail)
+                folder.mkdir(parents=True, mode=0o700)
+                pull_folder(host, remote_folder, folder, AGENT_SEND_FILES)
+        finally:
+            if reviews:
+                bundle.unlink(missing_ok=True)
+        if not (folder / 'plan.txt').is_file() or not (folder / 'plan.txt').read_bytes().startswith(spec['format'].encode()):
+            raise RuntimeError('The host sent back something that is not a list of this kind.')
+        meta = {'format': 'sentinel-remote-batch-1', 'kind': kind, 'host': args.host, 'root': args.root, 'remote_folder': remote_folder, 'run': run_dir.name,
+                'created_utc': now().isoformat()}
+        meta.update({'priority': args.priority, 'include_critical': args.include_critical} if kind == 'quarantine' else {'locale': args.locale})
+        (folder / 'batch.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
+    text = (folder / 'plan.txt').read_text(encoding='utf-8', errors='replace')
+    entries = plan_entries(text)
+    if kind == 'quarantine':
+        counts = {level: sum(entry['priority'] == level for entry in entries) for level in ('high', 'medium', 'review')}
+        print(f'Made a list of {len(entries)} files to move out of the website: ' + ', '.join(f'{count} {level}' for level, count in counts.items() if count) + '.' if entries else 'No files qualify for the list.')
+    else:
+        missing = sum(entry['sha256'] == 'missing' for entry in entries)
+        print(f'Made a list of {len(entries)} files to swap for clean copies' + (f', {missing} of them missing and to be put back' if missing else '') + '.' if entries else 'No files need a clean copy.')
+        for source in plan_sources(text):
+            print('  Clean copies from: ' + clean(source))
     print(f'{sum(answer.get("skipped", {}).values())} findings were left out; skipped.txt says why.')
     print('Nothing on the website has changed.')
     print('List: ' + str(folder))
     if entries:
         print('Read plan.txt there. To spare a file, start its line with #. Then check the list:')
-        print('  ' + next_command(args, 'quarantine', folder))
+        print('  ' + next_command(args, spec['apply'], folder))
     return 0
 
-def batch_step(args, action):
-    """Check a list on the host, or with --apply move its files out (quarantine) or put them back (restore)."""
-    folder, remote_folder = load_batch(args)
+def batch_step(args, command):
+    """Check a list on the host, or with --apply carry it out, or undo it."""
+    kind, action = STEPS[command]
+    spec = KINDS[kind]
+    folder, remote_folder = load_batch(args, kind)
     store = remote_folder.rsplit('/', 1)[0] + '/quarantine-store'
     only = getattr(args, 'only', [])
     if len(only) > MAX_ONLY:
-        raise ValueError(f'Use --only for at most {MAX_ONLY} files at a time, or leave it out to put back everything.')
+        raise ValueError(f'Use --only for at most {MAX_ONLY} files at a time, or leave it out for every file.')
     if getattr(args, 'limit', None) is not None and args.limit < 1:
         raise ValueError('--limit must be at least 1.')
     host = Host(args)
@@ -563,21 +629,23 @@ def batch_step(args, action):
         plan, _, plan_sha, _ = batch_files(folder)
         if args.apply and (args.plan_sha256 or '').lower() != plan_sha:
             raise ValueError('--apply needs --plan-sha256 from checking this exact list. The list has changed, or the hash is wrong: check it again. Nothing was changed.')
-        with host_folder(host, args, QUARANTINE_FILES, {}) as (run_path, _):
+        with host_folder(host, args, spec['files'], {}) as (run_path, _):
             try:
                 host.capture(host.agent(AGENT_PUT_PLAN, remote_folder), plan)
             except RuntimeError:
                 raise RuntimeError('This list\'s folder was not found on the host (' + remote_folder + '). Make a new list.') from None
             tail = ['--root', args.root, '--store', store, '--plan', remote_folder + '/plan.txt'] + (['--apply', '--plan-sha256', plan_sha] if args.apply else [])
-            if action == 'quarantine':
+            if command in ('quarantine', 'replace'):
                 tail += (['--limit', str(args.limit)] if args.limit else []) + (['--skip-problems'] if args.skip_problems else [])
             for path in only:
                 tail += ['--only', path]
-            print({'quarantine': 'Moving files out of the website...', 'restore': 'Putting files back...'}[action] if args.apply else 'Checking the list on the host. Nothing on the website changes.', flush=True)
+            doing = {'quarantine': 'Moving files out of the website...', 'restore': 'Putting files back...', 'replace': 'Swapping in clean copies...',
+                     'replace-undo': 'Changing files back to the originals...'}
+            print(doing[command] if args.apply else 'Checking the list on the host. Nothing on the website changes.', flush=True)
             try:
-                code, answer = run_batch(host, run_path, action, tail)
+                code, answer = run_batch(host, run_path, spec['program'], action, tail)
             finally:
-                # Whatever happened, the receipt is wanted here: it records every file moved so far.
+                # Whatever happened, the receipt is wanted here: it records every file changed so far.
                 try:
                     sync_receipt(host, remote_folder, folder, plan)
                 except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
@@ -588,38 +656,122 @@ def batch_step(args, action):
         check.unlink(missing_ok=True)
         if not args.apply:
             receipt_sha = batch_files(folder)[3]
-            check.write_text(json.dumps(dict(answer, action=action, only=sorted(only), receipt_sha256=receipt_sha, checked_utc=now().isoformat()), indent=2), encoding='utf-8')
-    show_step(args, action, folder, answer)
+            check.write_text(json.dumps(dict(answer, action=command, only=sorted(only), receipt_sha256=receipt_sha, checked_utc=now().isoformat()), indent=2), encoding='utf-8')
+    show_step(args, command, folder, answer)
     return code
 
-def show_step(args, action, folder, answer):
+def show_step(args, command, folder, answer):
     get = lambda key: answer.get(key, 0)
     for item in answer.get('problems', []) + answer.get('failed', []):
         print(f'  {item["file"]}: {item["problem"]}')
     status = answer.get('status', '')
-    if action == 'quarantine' and not args.apply:
-        print(f'Checked: {get("ready")} files ready to move, {get("already_in_store")} already moved, {get("problem_count")} with problems.')
+    forward = command in ('quarantine', 'replace')
+    undo = {'quarantine': 'restore', 'replace': 'replace-undo'}.get(command, command)
+    if forward and not args.apply:
+        done = get('already_in_store') if command == 'quarantine' else get('already_done')
+        print(f'Checked: {get("ready")} files ready to ' + ('move' if command == 'quarantine' else 'swap for clean copies') + f', {done} already done, {get("problem_count")} with problems.')
         if get('problem_count'):
             print('Files with problems stop the whole list. Usually they have changed since the scan, which needs a look. Spare them (start their line with #), or add --skip-problems to leave them where they are.')
         print('Nothing on the website has changed.')
         if get('ready'):
-            print('To move them: ' + next_command(args, 'quarantine', folder, '--apply', '--plan-sha256', answer['plan_sha256']))
-    elif action == 'quarantine':
+            print('To go ahead: ' + next_command(args, command, folder, '--apply', '--plan-sha256', answer['plan_sha256']))
+    elif forward:
         if status == 'stopped-before-changes':
-            print(f'Nothing was moved: {get("problem_count")} files differ from the list. Check the list again.')
+            print(f'Nothing was changed: {get("problem_count")} files differ from the list. Check the list again.')
         else:
-            print(f'Moved {get("moved")} files out of the website. {get("failed_count")} failed.' + (f' {get("still_to_do")} still to do: check the list again and move the next ones.' if get('still_to_do') else ''))
+            print((f'Moved {get("moved")} files out of the website.' if command == 'quarantine' else f'Swapped {get("replaced")} files for clean copies.')
+                  + f' {get("failed_count")} failed.' + (f' {get("still_to_do")} still to do: check the list again and do the next ones.' if get('still_to_do') else ''))
             if status == 'stopped-after-repeated-failures':
                 print('Stopped after 5 failures in a row, which usually means a problem such as a full disk.')
-            print('Check the site now, then scan again. Moving files does not clear caches, end logins or close the way in.')
-            print('To put files back: ' + next_command(args, 'restore', folder))
+            print('Check the site now, then scan again. This does not clear caches, end logins or close the way in.')
+            print('To undo: ' + next_command(args, undo, folder))
     elif not args.apply:
-        print(f'Checked: {get("ready")} files ready to put back, {get("problem_count")} with problems. Nothing on the website has changed.')
+        print(f'Checked: {get("ready")} files ready to ' + ('put back' if command == 'restore' else 'change back to the originals') + f', {get("problem_count")} with problems. Nothing on the website has changed.')
         if get('ready'):
-            print('Putting files back makes them active again, including any malware among them.')
-            print('To put them back: ' + next_command(args, 'restore', folder, *[item for path in getattr(args, 'only', []) for item in ('--only', path)], '--apply', '--plan-sha256', answer['plan_sha256']))
+            print('This makes the original files active again, including any malware among them.')
+            print('To go ahead: ' + next_command(args, command, folder, *[item for path in getattr(args, 'only', []) for item in ('--only', path)], '--apply', '--plan-sha256', answer['plan_sha256']))
     else:
-        print(f'Put back {get("restored")} files. {get("failed_count")} failed. Their copies stay in the private folder on the host.')
+        print((f'Put back {get("restored")} files.' if command == 'restore' else f'Changed {get("undone")} files back to the originals.')
+              + f' {get("failed_count")} failed. Their copies stay in the private folder on the host.')
+
+# Reviews. Kept on this computer beside the site's runs, in the hosted install's record format. A review covers
+# one finding at one exact file hash, so it lapses as soon as the file changes.
+
+def read_review_records(site_dir):
+    folder = site_dir / 'review-notes'
+    records = []
+    for path in sorted(folder.glob('*.json')) if folder.is_dir() else []:
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get('format') == 'sentinel-review-1' and isinstance(record.get('created_utc'), str):
+            records.append(record)
+    return records
+
+def review_records_for(report, site_dir):
+    """The records that belong to this report's site, as the host names it."""
+    return [record for record in read_review_records(site_dir) if record.get('site_root') == report.get('site_root')]
+
+def apply_reviews(report, records):
+    """Mark each finding reviewed, or changed since its review, as the hosted install judges it."""
+    manage = load_module('manage')
+    for finding in report['findings']:
+        if not isinstance(finding, dict):
+            continue
+        state = manage.review_status(finding, records)
+        if state.startswith('Reviewed benign'):
+            latest = max((r for r in records if tuple(r.get('finding_key', [])) == manage.finding_key(finding)), key=lambda r: r['created_utc'])
+            finding['review'] = {'note': str(latest.get('note', '')), 'utc': latest['created_utc']}
+        elif state.startswith('Changed since'):
+            finding['review_changed'] = True
+    return report
+
+def render_view(run_dir):
+    """The report page for one run, built here from its sealed report.json with your reviews applied. It is kept
+    in a views folder, outside the run, so the sealed evidence never changes. Falls back to the host's own page."""
+    try:
+        report = read_report(run_dir)
+        apply_reviews(report, review_records_for(report, run_dir.parent))
+        page = load_module('sentinel').render_report(report, run_dir / 'report.json', None, show_commands=False)
+    except (RuntimeError, KeyError, TypeError, ValueError, AttributeError):
+        return run_dir / 'report.html'
+    views = run_dir.parent / 'views'
+    views.mkdir(mode=0o700, exist_ok=True)
+    path = views / (run_dir.name + '.html')
+    path.write_text(page, encoding='utf-8')
+    return path
+
+def record_review(args):
+    """Record that you checked one finding and it is harmless, or withdraw that. Nothing on the host changes."""
+    run_dir = sealed_run(args.run)
+    report = read_report(run_dir)
+    if not 1 <= args.finding <= len(report['findings']):
+        raise ValueError('--finding is out of range: findings are numbered from 1, as in the report.')
+    finding = report['findings'][args.finding - 1]
+    manage = load_module('manage')
+    if not isinstance(finding, dict) or not manage.reviewable(finding):
+        raise ValueError('This finding has no complete file hash, so it cannot be reviewed. Database findings cannot be, nor files too large to read in full.')
+    if args.sha256.lower() != str(finding['sha256']).lower():
+        raise ValueError('--sha256 does not match that finding. Nothing was recorded.')
+    note = args.note.strip()
+    if not note or len(note) > 2000:
+        raise ValueError('Give a note of 1 to 2000 characters saying what you checked.')
+    folder = run_dir.parent / 'review-notes'
+    folder.mkdir(mode=0o700, exist_ok=True)
+    record = {'format': 'sentinel-review-1', 'site_root': report.get('site_root'), 'created_utc': now().isoformat(), 'finding_key': list(manage.finding_key(finding)),
+              'sha256': str(finding['sha256']).lower(), 'decision': args.decision, 'note': note, 'source_report': str(run_dir / 'report.json'),
+              'original_finding_index': args.finding}
+    with (folder / (os.urandom(16).hex() + '.json')).open('x', encoding='utf-8') as stream:
+        json.dump(record, stream, indent=2)
+    print(('Recorded as reviewed: ' if args.decision == 'benign' else 'Review withdrawn: ') + clean(finding.get('location')) + ' (' + clean(finding.get('rule'), 80) + ')')
+    print('This covers the file exactly as it is now. If it changes, it counts as a finding again.')
+    print('Open the report: ' + str(render_view(run_dir)))
+    return 0
+
+def open_report(args):
+    print('Open the report: ' + str(render_view(Path(os.path.abspath(args.run)))))
+    return 0
 
 def remote_scan_arguments(args, run_path, references):
     tail = [args.remote_python, '-I', '-S', run_path + '/sentinel.py', '--root', args.root, '--output', run_path + '/report',
@@ -716,12 +868,12 @@ def host_folder(host, args, names, extra):
         except (RuntimeError, OSError, subprocess.TimeoutExpired):
             print('WARNING: could not remove the temporary folder on the host: ' + run_path, file=sys.stderr, flush=True)
 
-def pull_folder(host, remote_path, destination):
+def pull_folder(host, remote_path, destination, agent=AGENT_SEND):
     """Copy the plain files in one host folder into destination, which must not already hold them.
     Some hosts' connections now and then cut a copy short, so a cut-off copy is tried once more."""
     before = set(destination.iterdir())
     for attempt in (1, 2):
-        process = subprocess.Popen(host.command(host.agent(AGENT_SEND, remote_path)), stdout=subprocess.PIPE)
+        process = subprocess.Popen(host.command(host.agent(agent, remote_path)), stdout=subprocess.PIPE)
         try:
             try:
                 safe_extract(process.stdout, destination)
@@ -779,7 +931,12 @@ def run_scan(args):
         print(note)
     print(timeline_problem or 'Timeline: ' + str(run_dir / 'timeline.html'))
     print(vuln_line)
-    print('Open the report: ' + str(run_dir / 'report.html'))
+    page = render_view(run_dir)
+    report = read_report(run_dir)
+    reviewed = sum(1 for finding in apply_reviews(report, review_records_for(report, site_dir))['findings'] if isinstance(finding, dict) and finding.get('review'))
+    if reviewed:
+        print(f'{reviewed} findings you reviewed as harmless are counted apart in the report.')
+    print('Open the report: ' + str(page))
     return code, run_dir, comparison
 
 def account_directory(evidence, host):
@@ -1053,7 +1210,7 @@ def parser():
         c.add_argument('--evidence-dir', default='sentinel-evidence', help='Folder on this computer for evidence')
         c.add_argument('--remote-temp', default='~', help='Host folder for the temporary run folder. Must be outside every website.')
         c.add_argument('--core', action='store_true')
-        c.add_argument('--locale', default='en_US')
+        c.add_argument('--locale', default='auto', help='Language edition for --core, such as en_GB. Default: read from the site')
         for flag in ('plugins', 'themes', 'persistence', 'account-cron'):
             c.add_argument('--' + flag, action='store_true')
         c.add_argument('--db-from-wp-config', action='store_true', help='Check the database without prompting, reading its details from wp-config.php on the host as text')
@@ -1098,23 +1255,38 @@ def parser():
         connection(c)
         c.add_argument('--root', required=True, help='Absolute path of the WordPress site on the host')
         c.add_argument('--remote-temp', default='~', help='Host folder for the temporary run folder. Must be outside every website.')
-    c = sub.add_parser('quarantine-plan', allow_abbrev=False, help='Make a list of files to move out of the website, from a saved scan. Changes nothing')
-    quarantining(c)
-    c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
-    c.add_argument('--priority', choices=('high', 'medium', 'review'), default='high', help='Include findings at this priority or higher')
-    c.add_argument('--include-critical', action='store_true', help='Allow files WordPress needs in order to run')
-    c.add_argument('--private-dir', default='~/wp-sentinel-private', help='Private folder on the host, outside every website, for lists and moved files')
-    for name, text in (('quarantine', 'Check a list, or with --apply move its files out of the website'), ('restore', 'Check, or with --apply put back, files a list moved')):
+    for name, text in (('quarantine-plan', 'Make a list of files to move out of the website, from a saved scan. Changes nothing'),
+                       ('replace-plan', 'Make a list of core, plugin and theme files to swap for verified clean copies, from a saved scan. Changes nothing')):
         c = sub.add_parser(name, allow_abbrev=False, help=text)
         quarantining(c)
-        c.add_argument('--plan', type=Path, required=True, help='The list folder made by quarantine-plan')
+        c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
+        c.add_argument('--private-dir', default='~/wp-sentinel-private', help='Private folder on the host, outside every website, for lists and moved files')
+        if name == 'quarantine-plan':
+            c.add_argument('--priority', choices=('high', 'medium', 'review'), default='high', help='Include findings at this priority or higher')
+            c.add_argument('--include-critical', action='store_true', help='Allow files WordPress needs in order to run')
+        else:
+            c.add_argument('--locale', default='auto', help='Language edition of the WordPress core copy, such as en_GB. Default: read from the site')
+            c.add_argument('--core-version', help='WordPress version of the core copy. Default: read from the site')
+    for name, text in (('quarantine', 'Check a list, or with --apply move its files out of the website'), ('restore', 'Check, or with --apply put back, files a list moved'),
+                       ('replace', 'Check a list, or with --apply swap its files for clean copies'), ('replace-undo', 'Check, or with --apply change back, files a list swapped')):
+        c = sub.add_parser(name, allow_abbrev=False, help=text)
+        quarantining(c)
+        c.add_argument('--plan', type=Path, required=True, help='The list folder made by quarantine-plan or replace-plan')
         c.add_argument('--apply', action='store_true')
         c.add_argument('--plan-sha256', help='From checking this exact list')
-        if name == 'quarantine':
-            c.add_argument('--limit', type=int, help='Move at most this many files now; check again and repeat for the rest')
-            c.add_argument('--skip-problems', action='store_true', help='Leave files that differ from the list where they are, and move the rest')
+        if name in ('quarantine', 'replace'):
+            c.add_argument('--limit', type=int, help='Change at most this many files now; check again and repeat for the rest')
+            c.add_argument('--skip-problems', action='store_true', help='Leave files that differ from the list where they are, and do the rest')
         else:
-            c.add_argument('--only', action='append', default=[], help='Put back only this file, relative to the site; repeatable')
+            c.add_argument('--only', action='append', default=[], help='Undo only this file, relative to the site; repeatable')
+    c = sub.add_parser('review', allow_abbrev=False, help='Record that you checked a finding and it is harmless. Kept on this computer; it lapses if the file changes')
+    c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
+    c.add_argument('--finding', type=int, required=True, help='The finding number, as shown in the report (#1, #2, ...)')
+    c.add_argument('--sha256', required=True, help="The finding's SHA-256, as shown in the report")
+    c.add_argument('--note', required=True, help='What you checked, and why it is harmless')
+    c.add_argument('--decision', choices=('benign', 'withdraw'), default='benign', help='withdraw cancels an earlier review')
+    c = sub.add_parser('report', allow_abbrev=False, help='Rebuild a run\'s report page with your reviews applied, and print where it is')
+    c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
     c = sub.add_parser('alert-test', allow_abbrev=False, help='Send a test alert')
     c.add_argument('--alert-config', type=Path, required=True)
     c.add_argument('--site-name', default='test')
@@ -1137,13 +1309,14 @@ ADMIN_WARNING = ('WARNING: this window is running as administrator. Evidence fol
 def main(argv=None):
     args = parser().parse_args(argv)
     os.umask(0o077)
-    if args.action in ('scan', 'scan-all', 'checklist', 'quarantine-plan') and elevated():
+    if args.action in ('scan', 'scan-all', 'checklist', 'quarantine-plan', 'replace-plan') and elevated():
         print(ADMIN_WARNING, file=sys.stderr, flush=True)
     if getattr(args, 'start', False) is None:
         args.start = ['~']
     try:
         return {'scan': scan, 'discover': discover, 'scan-all': scan_all, 'verify': verify, 'prune': prune, 'checklist': make_checklist, 'alert-test': alert_test,
-                'quarantine-plan': quarantine_plan, 'quarantine': lambda a: batch_step(a, 'quarantine'), 'restore': lambda a: batch_step(a, 'restore')}[args.action](args)
+                'review': record_review, 'report': open_report, 'quarantine-plan': lambda a: make_list(a, 'quarantine'), 'replace-plan': lambda a: make_list(a, 'replace'),
+                **{name: lambda a, name=name: batch_step(a, name) for name in STEPS}}[args.action](args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print('Stopped: ' + str(error), file=sys.stderr)
         return 2

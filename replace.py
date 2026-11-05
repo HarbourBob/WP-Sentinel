@@ -58,6 +58,11 @@ def owner_of(location):
 class Sources:
     """Opens each clean source at most once, and hands out its files only after verifying them."""
     def __init__(self, root, folder, references, core_version, locale):
+        if locale == 'auto':
+            try:
+                locale = s.detect_core_locale(root)
+            except OSError:
+                locale = 'en_US'
         self.root, self.folder, self.core_version, self.locale = root, folder, core_version, locale
         self.references = dict(item.split('=', 1) for item in references)
         self.opened, self.described = {}, {}
@@ -178,19 +183,22 @@ def make_plan(report_path, root, reviews_dir, output, references=(), core_versio
         m.private_path(item.split('=', 1)[1], root)
     files = collections.OrderedDict()
     skipped = collections.Counter()
+    entries, skipped_lines, written = [], [], set()
+    def skip(reason, location):
+        skipped[reason.split(': ')[0]] += 1
+        skipped_lines.append(reason + '\t' + (location if b.plain_name(location) else repr(location)))
     for finding in report['findings']:
         if isinstance(finding, dict) and finding.get('source') == 'file':
             files.setdefault(str(finding.get('location', '')), []).append(finding)
+        elif isinstance(finding, dict) and finding.get('severity') in ('high', 'medium', 'review'):
+            # Listed, not just counted, so it is clear these still need dealing with another way.
+            skip('database finding: clean copies replace files only', str(finding.get('severity')) + ' ' + str(finding.get('rule', '')) + ' in ' + str(finding.get('location', '')))
         else:
             skipped['database or other non-file finding'] += 1
     output = m.private_path(output, root)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     (output / 'clean').mkdir(mode=0o700)
     sources = Sources(root, output, references, core_version, locale)
-    entries, skipped_lines, written = [], [], set()
-    def skip(reason, location):
-        skipped[reason.split(': ')[0]] += 1
-        skipped_lines.append(reason + '\t' + (location if b.plain_name(location) else repr(location)))
     try:
         for location, findings in files.items():
             if not b.wanted_path(location, paths):
@@ -209,7 +217,7 @@ def make_plan(report_path, root, reviews_dir, output, references=(), core_versio
                 continue
             owner = owner_of(location)
             if owner is None:
-                skip('no official copy exists for this location: if it should not be there, use batch-plan', location)
+                skip('no official copy exists for this location: if it should not be there, use Quarantine (batch-plan)', location)
                 continue
             try:
                 source = sources.get(owner)
@@ -224,7 +232,7 @@ def make_plan(report_path, root, reviews_dir, output, references=(), core_versio
                 if location in b.ROOT_CRITICAL:
                     skip('this file is unique to your site: inspect and clean it by hand', location)
                 else:
-                    skip('not part of the official copy: if it should not be there, use batch-plan', location)
+                    skip('not part of the official copy: if it should not be there, use Quarantine (batch-plan)', location)
                 continue
             new = q.sha(clean)
             try:

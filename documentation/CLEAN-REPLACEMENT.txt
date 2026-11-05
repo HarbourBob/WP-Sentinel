@@ -9,8 +9,9 @@ copy then goes in with an atomic swap, so the site never sees a missing or half
 written file. Replacing files does not clear caches, end sessions, fix the hole
 the attacker used or remove backdoors elsewhere.
 
-Try this on a staging copy first. The downloads have been tried against the real
-WordPress.org, but only on a throwaway test site, not on a live one.
+Try this on a staging copy first. In November 2026 a core file with a harmless edit was
+swapped for its WordPress.org copy and changed back on a live SiteGround site, from the
+owner's computer. Plugins and themes have been tried on test sites only.
 
 THE THREE STEPS
 
@@ -114,8 +115,9 @@ if WordPress has updated it since. Files that were put back are removed again.
 
 IF YOU SCAN FROM YOUR OWN COMPUTER
 
-sentinel-remote.py accepts --themes too. Replacement has to run on the host, so copy
-report.json up first, outside the website, as BATCH-QUARANTINE.txt describes.
+sentinel-remote.py does all of this from your computer, with nothing installed on the
+host: see "CLEAN COPIES FROM YOUR OWN COMPUTER" in REMOTE.txt. The Clean copies window
+in sentinel-app.py does the same; see APP.txt. Your own ZIPs still need a hosted install.
 
 The host needs to be able to reach api.wordpress.org and downloads.wordpress.org.
 

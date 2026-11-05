@@ -19,7 +19,7 @@ WHERE TO START
 
   INSTALL.txt             Install on a host and run your first scan.
   REMOTE.txt              Run from your own computer and keep evidence off the host.
-  APP.txt                 Scan and quarantine from a window instead of the command line (prototype).
+  APP.txt                 Scan, quarantine and clean copies from a window (prototype).
   ACCOUNT.txt             Find and scan every WordPress install on an account.
   MONITORING.txt          Scheduled checks, email and webhook alerts, old report cleanup.
   RULES.txt               What the scanner looks for and how to read findings.
@@ -45,8 +45,20 @@ WHAT IS NEW IN 0.25
   installed on the host. The app has a Quarantine window for the same, where Move and
   Put back only unlock after checking that exact list. Tested on a real SiteGround
   account. See REMOTE.txt and APP.txt.
-- A quarantine list now also names the database findings it leaves out, since
-  quarantine moves files only.
+- Reviews from your own computer: sentinel-remote.py review, and a Reviews window in the
+  app, record that you checked a finding and it is harmless. It is then counted apart
+  in the report and left out of lists, until the file changes.
+- For scans from your own computer, the report page is now built on your computer from
+  the sealed report, with reviews applied. It no longer shows hosted-install commands,
+  which do not apply there.
+- Clean copies from your own computer: sentinel-remote.py replace-plan, replace and
+  replace-undo swap changed core, plugin and theme files for verified copies from
+  WordPress.org, and change them back. The app has a Clean copies window for the same.
+- Scans from your own computer read the site's language edition, such as en_GB, for
+  --core. Before, every site was compared with en_US, so wp-includes/version.php on a
+  non-US site was reported as changed when it was not.
+- Quarantine and clean copies lists now also name the database findings they leave
+  out, since they change files only.
 - Hosts that name the home folder through a symlink, as SiteGround does, now work.
 - A copy back from the host that is cut off part way is tried once more, and a second
   failure gives a plain message instead of a crash.

@@ -837,6 +837,12 @@ def detect_core_version(root):
         raise ValueError('Could not find a version in wp-includes/version.php')
     return match.group(1)
 
+def detect_core_locale(root):
+    """The language edition, from $wp_local_package in wp-includes/version.php. Without one, it is en_US."""
+    data = (root / 'wp-includes' / 'version.php').read_bytes()[:65536].decode('utf-8', errors='replace')
+    match = re.search(r'''^\s*\$wp_local_package\s*=\s*['"]([A-Za-z_]{2,20})['"]''', data, re.M)
+    return match.group(1) if match else 'en_US'
+
 def software_inventory(root):
     """Installed core, plugin and theme versions, read from headers as text, for the vulnerability check."""
     software = {'core': None, 'plugins': [], 'themes': []}
@@ -869,15 +875,22 @@ def finding_commands(finding, index, report_path, profile):
         commands['quarantine'] = base + f" file-quarantine --file {shlex.quote(finding['location'])} --sha256 {digest}"
     return commands
 
-def render_report(report, report_path, profile):
-    """Build the HTML report: self-contained, with every imported value escaped."""
+def render_report(report, report_path, profile, show_commands=True):
+    """Build the HTML report: self-contained, with every imported value escaped.
+    A finding may carry 'review' (reviewed as harmless for its exact content) or 'review_changed' (changed since);
+    reviewed findings are counted apart and hidden until asked for. show_commands=False leaves out the hosted-install commands."""
     escape = lambda value: html.escape(str(value), quote=True)
-    labels = {'high': 'High', 'medium': 'Medium', 'review': 'Review', 'info': 'Info'}
+    labels = {'high': 'High', 'medium': 'Medium', 'review': 'Review', 'info': 'Info', 'reviewed': 'Reviewed'}
     advice = {'high': 'Inspect first. Strong sign of malicious code, or code that should not be here.',
               'medium': 'Inspect soon. Suspicious, with some legitimate uses.',
               'review': 'Check it is expected. An observation rather than a sign of malware.',
-              'info': 'Recorded for comparison. No action needed unless it changes unexpectedly.'}
+              'info': 'Recorded for comparison. No action needed unless it changes unexpectedly.',
+              'reviewed': 'You checked these and recorded them as harmless. They count again if the file changes.'}
+    reviewed = sum(1 for finding in report['findings'] if finding.get('review'))
     counts = report['priority_counts']
+    if reviewed:
+        counts = {level: sum(1 for finding in report['findings'] if finding.get('severity') == level and not finding.get('review')) for level in SEVERITIES}
+    levels = list(SEVERITIES) + (['reviewed'] if reviewed else [])
     page = ['<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'\">",
             '<title>WordPress Sentinel report</title><style>',
@@ -885,6 +898,7 @@ def render_report(report, report_path, profile):
             'body{font:16px/1.5 system-ui,sans-serif;margin:0 auto;padding:2em 1em;max-width:1400px;color:var(--ink);background:#fff}',
             'h1{margin:0 0 .2em}.cards{display:flex;flex-wrap:wrap;gap:.75em;margin:1.2em 0}.card{flex:1 1 150px;border:1px solid var(--line);border-left:5px solid;border-radius:6px;padding:.7em 1em}',
             '.card b{display:block;font-size:1.8em;line-height:1.2}.card small{color:var(--muted)}.high{border-color:var(--high);color:var(--high)}.medium{border-color:var(--medium);color:var(--medium)}.review{border-color:var(--review);color:var(--review)}.info{border-color:var(--info);color:var(--info)}',
+            '.reviewed{border-color:#2f7d4f;color:#2f7d4f}.finding.reviewed{border-left-color:#2f7d4f;opacity:.85}.note{background:#eef7f1;border-radius:4px;padding:.3em .5em;color:var(--ink)}.changed{background:#fff4e5;border-radius:4px;padding:.3em .5em;color:var(--ink)}',
             '.card small,.card span{color:var(--ink)}.controls{display:flex;flex-wrap:wrap;gap:1em;align-items:center;background:var(--panel);padding:.7em 1em;border-radius:6px;position:sticky;top:0}',
             'input[type=search]{flex:1 1 220px;font:inherit;padding:.3em .5em}.finding{border:1px solid var(--line);border-left:5px solid;border-radius:6px;padding:.8em 1em;margin:.8em 0;color:var(--ink)}.finding.high{border-left-color:var(--high)}.finding.medium{border-left-color:var(--medium)}.finding.review{border-left-color:var(--review)}.finding.info{border-left-color:var(--info)}',
             '.finding h3{margin:0;font-size:1em;overflow-wrap:anywhere}.meta{color:var(--muted);font-size:.9em;overflow-wrap:anywhere}.tag{font-weight:700;text-transform:uppercase;font-size:.8em;margin-right:.5em}',
@@ -894,24 +908,31 @@ def render_report(report, report_path, profile):
             f"<p class=\"meta\">{escape(report['site_root'])} · {escape(report['created_utc'])} · Sentinel {escape(report['version'])} · rules {escape(report.get('rules_version', 'unknown'))}</p>",
             f"<p>{escape(report['files_inspected'])} files inspected, {len(report['findings'])} findings. Findings need review and are not malware verdicts. No findings would not mean the site is clean.</p>",
             '<div class="cards">']
-    for level in SEVERITIES:
-        page.append(f'<div class="card {level}"><b>{counts.get(level, 0)}</b>{labels[level]}<br><small>{escape(advice[level])}</small></div>')
+    for level in levels:
+        number = reviewed if level == 'reviewed' else counts.get(level, 0)
+        page.append(f'<div class="card {level}"><b>{number}</b>{labels[level]}<br><small>{escape(advice[level])}</small></div>')
     page.append('</div><section><h2>Findings</h2><div class="controls">')
-    for level in SEVERITIES:
-        checked = '' if level == 'info' else ' checked'
+    for level in levels:
+        checked = '' if level in ('info', 'reviewed') else ' checked'
         page.append(f'<label><input type="checkbox" data-level="{level}"{checked}> {labels[level]}</label>')
     page.append('<input type="search" id="search" placeholder="Filter by path or rule" aria-label="Filter by path or rule"></div><p class="meta" id="shown"></p>')
     for index, finding in enumerate(report['findings'], 1):
         level = finding.get('severity', 'review')
+        shown_as = 'reviewed' if finding.get('review') else level
         text = (str(finding.get('location', '')) + ' ' + str(finding.get('rule', ''))).lower()
         line = f" · line {escape(finding['line'])}" if finding.get('line') else ''
-        page.append(f'<article class="finding {escape(level)}" data-level="{escape(level)}" data-text="{escape(text)}"><span class="tag {escape(level)}">{escape(labels.get(level, level))}</span>#{index}')
+        tag = (f'<span class="tag reviewed">Reviewed</span>' if finding.get('review') else '') + f'<span class="tag {escape(level)}">{escape(labels.get(level, level))}</span>'
+        page.append(f'<article class="finding {escape(shown_as)}" data-level="{escape(shown_as)}" data-text="{escape(text)}">{tag}#{index}')
         page.append(f"<h3>{escape(finding.get('location', ''))}</h3><div class=\"meta\">{escape(finding.get('rule', ''))} · {escape(finding.get('source', ''))}{line}</div><p>{escape(finding.get('reason', ''))}</p>")
+        if finding.get('review'):
+            page.append(f"<p class=\"note\">Reviewed as harmless, {escape(str(finding['review'].get('utc', ''))[:10])}: {escape(finding['review'].get('note', ''))}</p>")
+        elif finding.get('review_changed'):
+            page.append('<p class="changed">You reviewed this file before, but it has changed since. Look at it again.</p>')
         if finding.get('context'):
             page.append('<div class="meta">Context: <code>' + escape(json.dumps(finding['context'], ensure_ascii=False)) + '</code></div>')
         if finding.get('sha256'):
             page.append('<div class="meta">SHA-256: <code>' + escape(finding['sha256']) + '</code></div>')
-        commands = finding_commands(finding, index, report_path, profile)
+        commands = finding_commands(finding, index, report_path, profile) if show_commands else {}
         if commands:
             page.append('<details><summary>Commands</summary>')
             names = {'review': 'Record that you reviewed this and found it benign', 'quarantine': 'Preview quarantine (add --apply to perform it)'}
@@ -954,7 +975,7 @@ def main():
     parser.add_argument('--rules', type=Path, help='Rule pack to use instead of rules.json beside this program')
     parser.add_argument('--fail-on', choices=SEVERITIES, help='Exit 4 if any finding has this priority or higher. Exit 0 otherwise still means only that the scan completed.')
     parser.add_argument('--command-profile', help='Profile path to show in the commands printed in the HTML report')
-    parser.add_argument('--locale', default='en_US')
+    parser.add_argument('--locale', default='en_US', help='Language edition for --core-version, such as en_GB, or auto to read it from the site')
     parser.add_argument('--database', action='store_true', help='Prompt locally for database credentials')
     parser.add_argument('--db-from-wp-config', action='store_true', help='Check the database without prompting: read its details from wp-config.php as text, never executing it')
     parser.add_argument('--db-credentials', type=Path, help='Check the database without prompting: private JSON file outside the website')
@@ -1014,9 +1035,10 @@ def main():
             if detected != version:
                 findings.append(dict(source='file', location='wp-includes/version.php', severity='review', rule='core-version-differs', line=None,
                                      reason=f'The site says it is WordPress {detected}, but this check used {version}. If you upgraded, update the profile or use --core-version auto; otherwise many core files will look changed.'))
-            core, unchecked = check_core(root, hashes, version, args.locale, verified)
+            locale = detect_core_locale(root) if args.locale == 'auto' else args.locale
+            core, unchecked = check_core(root, hashes, version, locale, verified)
             findings.extend(core)
-            checks['core'] = f'Compared with {version} / {args.locale}; {unchecked} manifest files unchecked.'
+            checks['core'] = f'Compared with {version} / {locale}; {unchecked} manifest files unchecked.'
         except Exception as exc:
             checks['core'] = 'FAILED: ' + type(exc).__name__
             limitations.append('Core checksum verification failed; no conclusion about core integrity.')

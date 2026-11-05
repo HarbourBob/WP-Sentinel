@@ -28,7 +28,8 @@ sentinelctl: --account-cron, --max-file-mb, --max-files, --db-row-limit,
 --db-value-limit, --php, --fail-on and --locale. Use --port, --identity,
 --ssh-command and --remote-python if your connection needs them.
 
---core reads the installed version from the site unless you give --core-version.
+--core reads the installed version from the site unless you give --core-version, and
+its language edition, such as en_GB, unless you give --locale.
 
 The temporary folder is created in your home folder on the host. If that folder is
 inside a website, use --remote-temp to choose one that is not.
@@ -88,6 +89,24 @@ LIMITS: WHAT THIS DOES NOT PROVE
 - Evidence sent back is treated as untrusted: only plain files with simple names are
   accepted, up to 50 files and 1 GiB.
 
+REVIEWS AND THE REPORT PAGE
+
+After each scan, report.html is built on this computer from the sealed report.json and
+kept in SITE/views/RUN.html, which the scan prints. The host's own report.html is kept
+in the run folder as received. To rebuild a run's page, for example after a review:
+
+   python sentinel-remote.py report --run sentinel-evidence/SITE/RUN
+
+To record that you checked a finding and it is harmless, use its number and SHA-256 from
+the report:
+
+   python sentinel-remote.py review --run sentinel-evidence/SITE/RUN --finding 3 --sha256 HASH --note "SiteGround Security folder protection"
+
+Add --decision withdraw to cancel a review. Records are kept in SITE/review-notes, in the
+same format as a hosted install's. A review covers one finding at one exact file hash:
+the report counts it apart, quarantine-plan and replace-plan leave it out, and it lapses
+as soon as the file changes. Database findings cannot be reviewed.
+
 QUARANTINE FROM YOUR OWN COMPUTER
 
 Moving files out has to happen on the host, where the files are, and the moved files
@@ -126,8 +145,26 @@ repeatable, puts back just those files.
 
 Keep wp-sentinel-private on the host: restore needs the list and the moved files there.
 
-A hosted install (INSTALL.txt) is still needed for single-file quarantine by ID, clean
-replacement and database changes. The commands shown in a remote report apply to that
+CLEAN COPIES FROM YOUR OWN COMPUTER
+
+The same steps swap changed core, plugin and theme files for verified clean copies, and
+change them back. CLEAN-REPLACEMENT.txt explains where the copies come from and what is
+left out. The copies are downloaded and checked on the host, so it needs to reach
+api.wordpress.org and downloads.wordpress.org. They stay in wp-sentinel-private there.
+
+   python sentinel-remote.py replace-plan --host user@example.com --root /home/user/public_html --run sentinel-evidence/SITE/RUN
+   python sentinel-remote.py replace ... --plan LIST-FOLDER
+   python sentinel-remote.py replace ... --plan LIST-FOLDER --apply --plan-sha256 HASH
+   python sentinel-remote.py replace-undo ... --plan LIST-FOLDER
+
+Scan with --core, --plugins and --themes first, so the report names the changed files.
+The WordPress version and language edition are read from the site; --core-version and
+--locale set them instead. Read the "Clean copies from" lines replace-plan prints: is
+each one the release you expect? Lists are kept in a clean-copies folder beside the
+site's runs. Premium plugins and themes have no public copy and are left out.
+
+A hosted install (INSTALL.txt) is still needed for single-file quarantine by ID, your
+own ZIPs as clean copies, and database changes. The commands shown in a remote report apply to that
 hosted install, with your profile, such as ../site.json, in place of PROFILE, and report
 paths must be on the host for the review command.
 
@@ -161,8 +198,8 @@ icacls sentinel-evidence /grant "${env:USERNAME}:(OI)(CI)F" /T
 TESTING STATUS
 
 Run successfully against a real host over real SSH by the project owner in October
-2026. Quarantine and restore of a harmless test file were run the same way in November
-2026. Quoting, cleanup, tampering, unsafe evidence and cut-off copies are tested on
+2026. Quarantine and restore of a harmless test file, and a clean copy of a core file
+and its undo, were run the same way in November 2026. Quoting, cleanup, tampering, unsafe evidence and cut-off copies are tested on
 Windows with a stand-in for ssh. For a run with --database, check its result on your own host.
 
 For scheduled runs, alerts and removing old runs, see MONITORING.txt. To scan every

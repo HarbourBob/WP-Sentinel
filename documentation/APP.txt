@@ -1,8 +1,9 @@
-WORDPRESS SENTINEL 0.25.0-rc1 — SCANNING AND QUARANTINE FROM A WINDOW (PROTOTYPE)
+WORDPRESS SENTINEL 0.25.0-rc1 — SCANNING, REVIEWS AND CLEAN-UP FROM A WINDOW (PROTOTYPE)
 
 sentinel-app.py is a window for sentinel-remote.py. You fill in your site's SSH details
-once, press Scan, and the report opens in your browser. A second window moves files the
-scan found out of the website, and puts them back. It runs exactly the same scan as
+once, press Scan, and the report opens in your browser. Two more windows act on what the
+scan found: Quarantine moves files out of the website, and Clean copies swaps changed
+files for verified ones. Both can be undone. It runs exactly the same scan as
 the command line, over SSH from your computer, and keeps the sealed evidence on your
 computer. Nothing is installed on the website. See REMOTE.txt for how that works.
 
@@ -40,12 +41,30 @@ FIRST TIME
 
 AFTER A SCAN
 
-The Latest scan buttons open the report, the timeline, the vulnerability check and the
-post-incident checklist for the newest finished scan of the site that is filled in. Check
+The Latest scan buttons open the report, the timeline, the vulnerability check, your
+reviews and the post-incident checklist for the newest finished scan of the site that
+is filled in. Check
 saved evidence confirms that no saved scan has changed since it was sealed.
 
 The vulnerability check needs a Wordfence key file; see VULNERABILITIES.txt. The database
 check reads the database details from wp-config.php on the server; see REMOTE.txt.
+
+REVIEWS: MARKING FINDINGS YOU HAVE CHECKED
+
+Some findings are harmless and will appear in every scan, such as a security file your
+host or a security plugin added. Once you have checked one, press Reviews, under Latest
+scan, click the finding, press Mark as reviewed and say briefly what you checked.
+
+A reviewed finding is counted apart in the report, under a Reviewed box, and left out
+of Quarantine and Clean copies lists. The review covers the file exactly as it is in
+that scan. If the file changes, the finding counts again, marked "changed since your
+review", so look at it again. Withdraw review undoes a review. Database findings and
+files too large to read in full cannot be reviewed, because there is no file hash to
+tie the review to.
+
+Reviews are kept on this computer, in a review-notes folder beside the site's scans.
+The report page is built on this computer from the scan's sealed report, with your
+reviews applied, and kept in a views folder there. The sealed scan itself never changes.
 
 QUARANTINE: MOVING FILES OUT, AND PUTTING THEM BACK
 
@@ -87,6 +106,35 @@ files back, so leave wp-sentinel-private alone. Lists you made before can be ope
 List. Stopping part way is safe: files already moved stay moved, and checking the list
 again carries on from where it stopped.
 
+CLEAN COPIES: SWAPPING CHANGED FILES, AND CHANGING THEM BACK
+
+Quarantine is for files that should not be there at all. Clean copies are for files the
+site needs, such as WordPress core files or a plugin's own files, that differ from the
+official copy. Each one is swapped for a verified copy from WordPress.org, in your
+site's language edition. The original is kept in wp-sentinel-private, so you can change
+it back. A clean copy overwrites any edits made to that file on purpose.
+
+Scan first with the three "Compare ... with official copies" boxes ticked: that is how
+the report knows which files differ. Then press Clean copies, under Latest scan. The
+window works like the Quarantine window:
+
+1. Make a list. Sentinel downloads the clean copies on the server and checks each one
+   against WordPress.org's published checksums. This can take a minute. Nothing on the
+   website changes yet.
+2. Read "Clean copies from" above the list. Is each one the WordPress, plugin or theme
+   version you expect? The versions are read from the site's own files, which an attacker
+   can edit. If an older version is shown than you know you have, stop.
+3. Untick any file you have edited on purpose, then press Check the list.
+4. Press Swap the ticked files, and confirm.
+5. Check your site straight away, then scan again.
+
+To undo, open the Change back tab, tick the files, press Check, then Change back the
+ticked files. That brings back the originals, including any malware in them.
+
+Left out of the list, with the reason under What was left out: files with no official
+copy, such as anything in uploads (use Quarantine if they should not be there),
+wp-config.php and .htaccess, premium plugins and themes, and database findings.
+
 UNLOCKING YOUR KEY
 
 Unlock key uses Windows' OpenSSH Authentication Agent. If the window says the agent is not
@@ -117,10 +165,10 @@ Stop during a scan                The temporary .sentinel-run- folder may be lef
 
 LIMITS OF THIS PROTOTYPE
 
-It covers scanning one site, checking evidence, opening the results, and quarantine of
-the files in a scan. Scanning every site on an account, clean replacement, database
-changes, alerts and scheduled runs still use the command line. Put back at most 200
-chosen files at a time, or tick them all. Scans run with --unattended, so they never stop to ask a question; the
+It covers scanning one site, checking evidence, opening the results, and quarantine and
+clean copies for the files in a scan. Scanning every site on an account, your own ZIPs
+as clean copies, database changes, alerts and scheduled runs still use the command
+line. Undo at most 200 chosen files at a time, or tick them all. Scans run with --unattended, so they never stop to ask a question; the
 database check therefore always reads wp-config.php instead of prompting. On Mac and Linux
 the window works, but Unlock key and confirming the server show a command to run in a
 terminal instead.

@@ -88,6 +88,12 @@ Every action below previews first and needs `--apply` to make a change.
 - **Quarantine from your computer:** make a list from a saved scan, untick what to keep,
   check it, then move the files out and put them back, with nothing left installed on
   the host. From the command line or the app's Quarantine window.
+- **Reviews from your computer:** mark a finding you checked as harmless. It is counted
+  apart in the report and left out of lists until the file changes. From the command
+  line or the app's Reviews window.
+- **Clean copies from your computer:** the same steps swap changed core, plugin and theme
+  files for verified WordPress.org copies in the site's language, and change them back.
+  From the command line or the app's Clean copies window.
 - **Whole account:** `discover` finds every WordPress install. `scan-all` scans each one,
   with a summary page and one combined alert, and reports installs that appear or
   disappear.

@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1
+WORDPRESS SENTINEL 0.25.0-rc1
 
 BACK UP YOUR SITE FIRST, IF AT ALL POSSIBLE. Keep the backup away from the website.
 
@@ -19,7 +19,7 @@ WHERE TO START
 
   INSTALL.txt             Install on a host and run your first scan.
   REMOTE.txt              Run from your own computer and keep evidence off the host.
-  APP.txt                 Scan from a window instead of the command line (prototype).
+  APP.txt                 Scan and quarantine from a window instead of the command line (prototype).
   ACCOUNT.txt             Find and scan every WordPress install on an account.
   MONITORING.txt          Scheduled checks, email and webhook alerts, old report cleanup.
   RULES.txt               What the scanner looks for and how to read findings.
@@ -35,6 +35,25 @@ WHERE TO START
   DATABASE-INVENTORY.txt  Offline check of database backups.
   DATABASE-VERIFY.txt     Check a recorded database operation against live data.
   PACKAGE-CHECK.txt       Confirm an upload matches the release.
+
+WHAT IS NEW IN 0.25
+
+- A window for people who would rather not type commands: sentinel-app.py fills in
+  the SSH details, tests the connection, scans and opens the results. See APP.txt.
+- Quarantine from your own computer: sentinel-remote.py quarantine-plan, quarantine and
+  restore move a scan's files out of the website and put them back, with nothing left
+  installed on the host. The app has a Quarantine window for the same, where Move and
+  Put back only unlock after checking that exact list. Tested on a real SiteGround
+  account. See REMOTE.txt and APP.txt.
+- A quarantine list now also names the database findings it leaves out, since
+  quarantine moves files only.
+- Hosts that name the home folder through a symlink, as SiteGround does, now work.
+- A copy back from the host that is cut off part way is tried once more, and a second
+  failure gives a plain message instead of a crash.
+- verify lists run folders no chain covers, and also checks earlier chains kept as
+  chain-NAME.json. These are reported as gaps, not problems.
+- Started from an administrator window on Windows, the app and sentinel-remote.py warn
+  that reports would open as blank pages. REMOTE.txt shows how to unlock them.
 
 WHAT IS NEW IN 0.24
 

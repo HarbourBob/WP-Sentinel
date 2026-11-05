@@ -72,15 +72,18 @@ def make_plan(report_path, root, reviews_dir, output, priority='high', rules=(),
     allowed = PRIORITIES[:PRIORITIES.index(priority) + 1]
     files = collections.OrderedDict()
     skipped = collections.Counter()
-    for finding in report['findings']:
-        if isinstance(finding, dict) and finding.get('source') == 'file':
-            files.setdefault(str(finding.get('location', '')), []).append(finding)
-        else:
-            skipped['database or other non-file finding'] += 1
     entries, skipped_lines = [], []
     def skip(reason, location):
         skipped[reason] += 1
         skipped_lines.append(reason + '\t' + (location if plain_name(location) else repr(location)))
+    for finding in report['findings']:
+        if isinstance(finding, dict) and finding.get('source') == 'file':
+            files.setdefault(str(finding.get('location', '')), []).append(finding)
+        elif isinstance(finding, dict) and finding.get('severity') in allowed:
+            # Listed, not just counted, so it is clear these still need dealing with another way.
+            skip('database finding: quarantine moves files only', str(finding.get('severity')) + ' ' + str(finding.get('rule', '')) + ' in ' + str(finding.get('location', '')))
+        else:
+            skipped['database or other non-file finding'] += 1
     for location, findings in files.items():
         names = {str(item.get('rule', '')) for item in findings}
         if not wanted_path(location, paths):

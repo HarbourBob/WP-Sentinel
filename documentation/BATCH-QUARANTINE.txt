@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1 - BATCH QUARANTINE
+WORDPRESS SENTINEL 0.25.0-rc1 - BATCH QUARANTINE
 
 Move hundreds of reviewed files out of a site in one step, and put them back if
 you need to. You still make the decisions: Sentinel writes a list, you check it,
@@ -112,8 +112,12 @@ not overwrite a file that now exists at that path. Backups stay in the store.
 
 IF YOU SCAN FROM YOUR OWN COMPUTER
 
-Quarantine has to run on the host, and so the report has to be there too, outside
-the website. Copy it up first, by running this on your own computer, not on the host:
+sentinel-remote.py does all three steps from your computer, with nothing installed on
+the host: see "QUARANTINE FROM YOUR OWN COMPUTER" in REMOTE.txt. The Quarantine window
+in sentinel-app.py does the same; see APP.txt.
+
+With a hosted install instead, the report has to be on the host, outside the website.
+Copy it up first, by running this on your own computer, not on the host:
 
   scp -P PORT -i KEYFILE report.json USER@HOST:private-folder/report.json
 

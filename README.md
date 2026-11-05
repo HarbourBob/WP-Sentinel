@@ -6,7 +6,18 @@ WP Sentinel scans a WordPress site and its database over SSH for signs of compro
 helps you deal with what it finds. It produces a report you can read in a browser, and it
 can move reviewed files into a private quarantine or swap them for verified clean copies.
 
-Current release: **0.24.0-rc1**
+Current release: **0.25.0-rc1**
+
+## Status: new and largely untested, with no guarantees
+
+This is new software, offered for testing under the [MIT licence](LICENSE), with no
+warranty. It may not work on your host, it may miss malware, and it may flag innocent
+files. It has been run on one real site. How much real malware the rules catch has not
+been measured. Try it on a staging copy before relying on it.
+
+A report with no findings does not mean there is no malware.
+
+Testers and developers are welcome. See [Contributing](#contributing).
 
 ## What it does
 
@@ -93,7 +104,8 @@ python sentinel-remote.py scan --host user@example.com --root /home/user/public_
 [REMOTE.txt](documentation/REMOTE.txt) covers SSH ports, keys and database checks.
 
 Prefer not to type commands? `python sentinel-app.py` opens a window that runs the same
-scan. See [APP.txt](documentation/APP.txt). It is a prototype.
+scan, and a Quarantine window that moves the files it found out of the website and puts
+them back. See [APP.txt](documentation/APP.txt). It is a prototype.
 
 ## Guides
 
@@ -103,7 +115,7 @@ All guides are in the [documentation](documentation) folder.
 | --- | --- |
 | [INSTALL](documentation/INSTALL.txt) | Install on a host and run your first scan. |
 | [REMOTE](documentation/REMOTE.txt) | Run from your own computer and keep evidence off the host. |
-| [APP](documentation/APP.txt) | Scan from a window instead of the command line (prototype). |
+| [APP](documentation/APP.txt) | Scan and quarantine from a window instead of the command line (prototype). |
 | [ACCOUNT](documentation/ACCOUNT.txt) | Find and scan every WordPress install on an account. |
 | [MONITORING](documentation/MONITORING.txt) | Scheduled checks, email and webhook alerts, old report cleanup. |
 | [RULES](documentation/RULES.txt) | What the scanner looks for and how to read findings. |

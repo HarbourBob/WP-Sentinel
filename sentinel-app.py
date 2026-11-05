@@ -49,6 +49,9 @@ class App:
         self.root = root
         self.process = None
         self.lines = queue.Queue()
+        # Where the running command's output goes: this window, or the quarantine window.
+        self.view = self
+        self.quarantine = None
         root.title('WP Sentinel')
         root.minsize(760, 640)
         saved = self.load_settings()
@@ -102,9 +105,10 @@ class App:
             b = ttk.Button(pages, text=text, command=lambda n=name: self.open_page(n))
             b.pack(side='left', padx=(0, 6))
             self.busy_buttons.append(b)
-        b = ttk.Button(pages, text='Checklist', command=self.checklist)
-        b.pack(side='left', padx=(0, 6))
-        self.busy_buttons.append(b)
+        for text, command in (('Checklist', self.checklist), ('Quarantine', self.open_quarantine)):
+            b = ttk.Button(pages, text=text, command=command)
+            b.pack(side='left', padx=(0, 6))
+            self.busy_buttons.append(b)
         ttk.Button(pages, text='Evidence folder', command=self.open_evidence).pack(side='left')
 
         self.status = tk.StringVar(value='Fill in the connection, then press Test connection.')
@@ -178,10 +182,14 @@ class App:
 
     # Output -----------------------------------------------------------------------------------
     def write(self, text):
-        self.output.configure(state='normal')
-        self.output.insert('end', text)
-        self.output.see('end')
-        self.output.configure(state='disabled')
+        output = self.view.output
+        output.configure(state='normal')
+        output.insert('end', text)
+        output.see('end')
+        output.configure(state='disabled')
+
+    def views(self):
+        return [self] + ([self.quarantine] if self.quarantine else [])
 
     def pump(self):
         try:
@@ -195,18 +203,22 @@ class App:
             pass
         self.root.after(100, self.pump)
 
-    def run(self, argv, title, done=None):
-        """Run a command in the background, showing its output here."""
+    def run(self, argv, title, done=None, view=None):
+        """Run a command in the background, showing its output in view: this window unless another is given.
+        Only one runs at a time, since scans and quarantine steps for a site must not overlap."""
         if self.process:
+            messagebox.showinfo('WP Sentinel', 'Something is already running. Wait for it to finish, or press Stop.')
             return
-        self.output.configure(state='normal')
-        self.output.delete('1.0', 'end')
-        self.output.configure(state='disabled')
-        self.status.set(title + '…')
+        self.view = view or self
+        self.view.output.configure(state='normal')
+        self.view.output.delete('1.0', 'end')
+        self.view.output.configure(state='disabled')
+        self.view.status.set(title + '…')
         self.done = done
-        for b in self.busy_buttons:
-            b.configure(state='disabled')
-        self.stop_button.configure(state='normal')
+        for window in self.views():
+            for b in window.busy_buttons:
+                b.configure(state='disabled')
+        self.view.stop_button.configure(state='normal')
         env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUNBUFFERED='1')
         try:
             self.process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -224,17 +236,20 @@ class App:
 
     def finished(self, code):
         self.process = None
-        for b in self.busy_buttons:
-            b.configure(state='normal')
-        self.stop_button.configure(state='disabled')
+        for window in self.views():
+            for b in window.busy_buttons:
+                b.configure(state='normal')
+        self.view.stop_button.configure(state='disabled')
+        if self.quarantine:
+            self.quarantine.refresh()
         done, self.done = self.done, None
         if done:
             done(code)
         else:
-            self.status.set('Finished.' if code == 0 else 'Stopped with a problem (exit ' + str(code) + '). See the messages below.')
+            self.view.status.set('Finished.' if code == 0 else 'Stopped with a problem (exit ' + str(code) + '). See the messages below.')
 
-    def stop(self):
-        if self.process and messagebox.askyesno('WP Sentinel', 'Stop now? A scan stopped part way can leave its temporary folder on the server. '
+    def stop(self, question=None):
+        if self.process and messagebox.askyesno('WP Sentinel', question or 'Stop now? A scan stopped part way can leave its temporary folder on the server. '
                                                 'Its name starts with .sentinel-run- in your home folder there; you can delete it.'):
             self.process.terminate()
 
@@ -358,6 +373,19 @@ class App:
                 self.status.set('Could not make the checklist. See the messages below.')
         self.run([sys.executable, '-u', str(REMOTE), 'checklist', '--run', str(run_dir)], 'Making the checklist', done)
 
+    def open_quarantine(self):
+        if self.quarantine:
+            self.quarantine.top.lift()
+            return
+        s = self.settings()
+        run_dir = self.latest_run() if s else None
+        if not run_dir:
+            return
+        if not (run_dir / 'EVIDENCE.json').is_file():
+            messagebox.showinfo('WP Sentinel', 'The latest scan was not sealed, so it cannot be used for quarantine. Scan again.')
+            return
+        self.quarantine = QuarantineWindow(self, s, run_dir)
+
     def open_evidence(self):
         folder = self.evidence()
         if not folder.is_dir():
@@ -366,6 +394,365 @@ class App:
             os.startfile(folder)
         else:
             webbrowser.open(folder.as_uri())
+
+TICKED, UNTICKED = '☑', '☐'
+PRIORITIES = (('high', 'High priority only'), ('medium', 'High and medium'), ('review', 'Everything that needs review'))
+
+def stamp_text(name):
+    """batch-20261105T100000Z-abcdef or 20261105T100000Z-abcdef as 05 Nov 2026 10:00 UTC."""
+    match = re.search(r'(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})', name)
+    months = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split()
+    return f'{match[3]} {months[int(match[2]) - 1]} {match[1]} {match[4]}:{match[5]} UTC' if match else name
+
+class QuarantineWindow:
+    """Move files a scan found out of the website, and put them back. Every step runs sentinel-remote.py,
+    and Move and Put back only unlock after checking that exact list. See documentation/APP.txt."""
+    def __init__(self, app, s, run_dir):
+        self.app, self.s, self.run_dir = app, s, run_dir
+        self.lists = run_dir.parent / 'quarantine'
+        self.folder = None
+        self.back_chosen, self.back_seen = set(), set()
+        self.top = top = tk.Toplevel(app.root)
+        top.title('WP Sentinel: quarantine')
+        top.minsize(860, 720)
+        # Big enough rows for the tick boxes to be easy to see and click.
+        ttk.Style(top).configure('Treeview', rowheight=24, font=('Segoe UI', 10))
+        frame = ttk.Frame(top, padding=12)
+        frame.pack(fill='both', expand=True)
+        frame.columnconfigure(0, weight=1)
+        self.busy_buttons = []
+        def button(parent, text, command):
+            b = ttk.Button(parent, text=text, command=command)
+            b.pack(side='left', padx=(0, 6))
+            self.busy_buttons.append(b)
+            return b
+
+        ttk.Label(frame, text=s['target'] + '   ' + s['root'], foreground='#666').grid(row=0, column=0, sticky='w')
+        ttk.Label(frame, wraplength=820, justify='left', text='Quarantine moves files out of your website into a private folder on your hosting account, '
+                  'outside the website. Nothing is deleted, and you can put files back. Back up your site first: removing a file that a plugin '
+                  'or theme needs can break the site.').grid(row=1, column=0, sticky='w', pady=(4, 8))
+
+        make = ttk.LabelFrame(frame, text='Make a list from the latest scan, ' + stamp_text(run_dir.name), padding=8)
+        make.grid(row=2, column=0, sticky='ew')
+        self.priority = tk.StringVar(value='high')
+        for value, text in PRIORITIES:
+            ttk.Radiobutton(make, text=text, value=value, variable=self.priority).pack(side='left', padx=(0, 12))
+        self.critical = tk.BooleanVar(value=False)
+        ttk.Checkbutton(make, text='Include files WordPress needs to run (not advised)', variable=self.critical).pack(side='left', padx=(0, 12))
+        button(make, 'Make a list', self.make_list)
+
+        chooser = ttk.Frame(frame)
+        chooser.grid(row=3, column=0, sticky='ew', pady=8)
+        ttk.Label(chooser, text='List:').pack(side='left', padx=(0, 6))
+        self.choice = ttk.Combobox(chooser, state='readonly', width=70)
+        self.choice.pack(side='left')
+        self.choice.bind('<<ComboboxSelected>>', lambda event: self.load(self.choices[self.choice.current()]))
+        self.busy_buttons.append(self.choice)
+
+        self.tabs = ttk.Notebook(frame)
+        self.tabs.grid(row=4, column=0, sticky='nsew')
+        frame.rowconfigure(4, weight=1)
+
+        move = ttk.Frame(self.tabs, padding=8)
+        self.tabs.add(move, text='Move files out')
+        self.move_tree = self.tree(move, (('tick', 'Move', 50), ('priority', 'Priority', 70), ('path', 'File', 400), ('rules', 'Found by', 170), ('state', 'Done', 70)), self.toggle_move)
+        row = ttk.Frame(move)
+        row.pack(fill='x', pady=(6, 0))
+        button(row, 'Tick all', lambda: self.set_moves(True))
+        button(row, 'Untick all', lambda: self.set_moves(False))
+        button(row, 'What was left out', self.show_skipped)
+        self.move_count = tk.StringVar()
+        ttk.Label(row, textvariable=self.move_count).pack(side='left', padx=6)
+        row = ttk.Frame(move)
+        row.pack(fill='x', pady=(6, 0))
+        ttk.Label(row, text='How many at once:').pack(side='left', padx=(0, 6))
+        self.limit = ttk.Combobox(row, state='readonly', width=6, values=('All', '10', '50', '100'))
+        self.limit.current(0)
+        self.limit.pack(side='left', padx=(0, 12))
+        self.skip = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row, text='Leave files that have changed since the scan, and move the rest', variable=self.skip, command=self.refresh).pack(side='left')
+        row = ttk.Frame(move)
+        row.pack(fill='x', pady=(6, 0))
+        button(row, 'Check the list', self.check_move)
+        self.move_button = button(row, 'Move the ticked files', self.move)
+
+        back = ttk.Frame(self.tabs, padding=8)
+        self.tabs.add(back, text='Put files back')
+        ttk.Label(back, wraplength=800, text='Files this list has moved. Putting a file back makes it active again, including any malware in it.').pack(anchor='w', pady=(0, 6))
+        self.back_tree = self.tree(back, (('tick', 'Put back', 60), ('path', 'File', 520), ('moved', 'Moved (UTC)', 170)), self.toggle_back)
+        row = ttk.Frame(back)
+        row.pack(fill='x', pady=(6, 0))
+        button(row, 'Tick all', lambda: self.set_backs(True))
+        button(row, 'Untick all', lambda: self.set_backs(False))
+        self.back_count = tk.StringVar()
+        ttk.Label(row, textvariable=self.back_count).pack(side='left', padx=6)
+        row = ttk.Frame(back)
+        row.pack(fill='x', pady=(6, 0))
+        button(row, 'Check', self.check_back)
+        self.back_button = button(row, 'Put back the ticked files', self.put_back)
+
+        self.status = tk.StringVar(value='Make a list, or choose one you made before.')
+        ttk.Label(frame, textvariable=self.status, font=('Segoe UI', 10, 'bold'), wraplength=820, justify='left').grid(row=5, column=0, sticky='w', pady=(8, 2))
+        self.output = tk.Text(frame, height=9, wrap='word', font=('Consolas', 9), state='disabled')
+        self.output.grid(row=6, column=0, sticky='nsew')
+        row = ttk.Frame(frame)
+        row.grid(row=7, column=0, sticky='e', pady=(8, 0))
+        self.stop_button = ttk.Button(row, text='Stop', state='disabled', command=lambda: app.stop(
+            'Stop now? Files already moved stay moved. Check the list again afterwards: it carries on safely from where it stopped.'))
+        self.stop_button.pack(side='left', padx=(0, 6))
+        ttk.Button(row, text='Close', command=self.close).pack(side='left')
+        top.protocol('WM_DELETE_WINDOW', self.close)
+        self.fill_choices()
+        if self.choices:
+            self.load(self.choices[0])
+        self.refresh()
+
+    def tree(self, parent, columns, toggle):
+        box = ttk.Frame(parent)
+        box.pack(fill='both', expand=True)
+        tree = ttk.Treeview(box, columns=[c[0] for c in columns], show='headings', height=10, selectmode='none')
+        for name, heading, width in columns:
+            tree.heading(name, text=heading, anchor='w')
+            tree.column(name, width=width, stretch=name == 'path', anchor='w')
+        scroll = ttk.Scrollbar(box, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='left', fill='y')
+        tree.bind('<Button-1>', lambda event: tree.identify_region(event.x, event.y) == 'cell' and toggle(tree.identify_row(event.y)))
+        return tree
+
+    def close(self):
+        if self.app.process and self.app.view is self:
+            messagebox.showinfo('WP Sentinel', 'A quarantine step is still running. Wait for it to finish, or press Stop first.', parent=self.top)
+            return
+        self.app.quarantine = None
+        self.top.destroy()
+
+    def command(self, action, *more):
+        return [sys.executable, '-u', str(REMOTE), action] + self.app.connection_args(self.s) + ['--root', self.s['root'], '--unattended', *more]
+
+    # Lists ----------------------------------------------------------------------------------------
+    def fill_choices(self):
+        self.choices = sorted((p for p in self.lists.glob('batch-*') if remote.BATCH_NAME.fullmatch(p.name) and (p / 'batch.json').is_file()), reverse=True) if self.lists.is_dir() else []
+        labels = []
+        for folder in self.choices:
+            try:
+                plan = (folder / 'plan.txt').read_text(encoding='utf-8', errors='replace')
+                receipt = (folder / 'receipt.jsonl').read_text(encoding='utf-8', errors='replace') if (folder / 'receipt.jsonl').is_file() else ''
+                labels.append(f'{stamp_text(folder.name)}: {len(remote.plan_entries(plan))} files, {len(remote.quarantined_now(remote.receipt_events(receipt)))} moved out now')
+            except OSError:
+                labels.append(stamp_text(folder.name) + ': could not be read')
+        self.choice.configure(values=labels)
+        if self.folder in self.choices:
+            self.choice.current(self.choices.index(self.folder))
+
+    def load(self, folder):
+        self.folder = folder
+        self.back_chosen, self.back_seen = set(), set()
+        self.fill_choices()
+        self.refresh()
+
+    def read(self):
+        """The list's entries, receipt events and the text of its plan."""
+        plan = (self.folder / 'plan.txt').read_text(encoding='utf-8', errors='replace')
+        receipt = (self.folder / 'receipt.jsonl').read_text(encoding='utf-8', errors='replace') if (self.folder / 'receipt.jsonl').is_file() else ''
+        return remote.plan_entries(plan), remote.receipt_events(receipt), plan
+
+    def last_check(self, action, only=()):
+        """The last check of this exact list, if nothing has changed since. Move and Put back depend on it."""
+        try:
+            last = json.loads((self.folder / 'last-check.json').read_text(encoding='utf-8'))
+            _, _, plan_sha, receipt_sha = remote.batch_files(self.folder)
+        except (OSError, ValueError):
+            return None
+        same = last.get('action') == action and last.get('plan_sha256') == plan_sha and last.get('receipt_sha256') == receipt_sha and last.get('only') == sorted(only)
+        return last if same else None
+
+    def refresh(self):
+        """Redraw both lists and decide which buttons may be pressed."""
+        running = bool(self.app.process)
+        self.choice.configure(state='disabled' if running else 'readonly')
+        for tree in (self.move_tree, self.back_tree):
+            tree.delete(*tree.get_children())
+        self.move_button.configure(state='disabled')
+        self.back_button.configure(state='disabled')
+        if not self.folder:
+            self.move_count.set('')
+            self.back_count.set('')
+            return
+        try:
+            entries, events, _ = self.read()
+        except OSError as error:
+            self.status.set('This list could not be read: ' + str(error))
+            return
+        states = remote.file_states(events)
+        for number, entry in enumerate(entries):
+            self.move_tree.insert('', 'end', iid=str(number), values=(TICKED if entry['ticked'] else UNTICKED, remote.clean(entry['priority'], 20),
+                                  remote.clean(entry['path']), remote.clean(entry['rules'], 120).replace(',', ', '), states.get(entry['path'], '')))
+        ticked = sum(entry['ticked'] for entry in entries)
+        self.move_count.set(f'{ticked} of {len(entries)} ticked')
+        moved = remote.quarantined_now(events)
+        paths = [event['path'] for event in moved]
+        # Newly moved files start ticked; choices already made are kept.
+        self.back_chosen = (self.back_chosen & set(paths)) | (set(paths) - self.back_seen)
+        self.back_seen = set(paths)
+        for number, event in enumerate(moved):
+            self.back_tree.insert('', 'end', iid=str(number), values=(TICKED if event['path'] in self.back_chosen else UNTICKED, remote.clean(event['path']),
+                                  remote.clean(event.get('utc', ''), 19).replace('T', ' ')))
+        self.back_count.set(f'{len(self.back_chosen)} of {len(paths)} ticked')
+        if running:
+            return
+        last = self.last_check('quarantine')
+        if last and last.get('ready') and (not last.get('problem_count') or self.skip.get()):
+            self.move_button.configure(state='normal')
+        last = self.last_check('restore', self.only())
+        if last and last.get('ready'):
+            self.back_button.configure(state='normal')
+
+    def only(self):
+        """Files to put back, or none to mean every file the list has moved."""
+        return [] if self.back_chosen == self.back_seen else sorted(self.back_chosen)
+
+    def make_list(self):
+        def done(code):
+            self.fill_choices()
+            if code == 0 and self.choices:
+                self.load(self.choices[0])
+                self.tabs.select(0)
+                entries = self.read()[0]
+                left = self.skipped_rows()
+                database = sum(reason.startswith('database') for reason, _ in left)
+                note = (f' {len(left)} findings were left out' + (f', {database} of them in the database, which quarantine cannot move' if database else '')
+                        + ': see What was left out.') if left else ''
+                self.status.set((f'List made: {len(entries)} files. Untick any you want to keep, then press Check the list.' if entries else
+                                 'No files qualify for a list at this priority.') + note)
+            else:
+                self.status.set('The list was not made. See the messages below.')
+        argv = self.command('quarantine-plan', '--run', str(self.run_dir), '--priority', self.priority.get()) + (['--include-critical'] if self.critical.get() else [])
+        self.app.run(argv, 'Making a list. Nothing on the website changes', done, view=self)
+
+    def skipped_rows(self):
+        """(reason, what) for each finding left out of the list."""
+        try:
+            lines = (self.folder / 'skipped.txt').read_text(encoding='utf-8', errors='replace').splitlines()
+        except OSError:
+            lines = []
+        return [line.split('\t', 1) for line in lines if '\t' in line and not line.startswith('#')]
+
+    def show_skipped(self):
+        if not self.folder:
+            return
+        rows = self.skipped_rows()
+        window = tk.Toplevel(self.top)
+        window.title('Left out of this list')
+        text = tk.Text(window, width=110, height=24, wrap='word', font=('Consolas', 9))
+        text.pack(fill='both', expand=True, padx=8, pady=8)
+        text.insert('end', 'These findings are not in the list. They still need dealing with.\n\n' if rows else 'Nothing was left out.\n')
+        for reason, path in rows:
+            text.insert('end', remote.clean(path) + '\n    ' + remote.clean(reason) + '\n')
+        text.configure(state='disabled')
+
+    # Moving files out -------------------------------------------------------------------------------
+    def write_ticks(self, chosen):
+        _, _, plan = self.read()
+        (self.folder / 'plan.txt').write_bytes(remote.tick(plan, chosen).encode('utf-8'))
+        self.status.set('List changed. Press Check the list before moving files.')
+        self.refresh()
+
+    def toggle_move(self, item):
+        if not item or self.app.process or not self.folder:
+            return
+        entries = self.read()[0]
+        entry = entries[int(item)]
+        self.write_ticks({e['path'] for e in entries if e['ticked'] != (e is entry)})
+
+    def set_moves(self, ticked):
+        if self.folder and not self.app.process:
+            self.write_ticks({e['path'] for e in self.read()[0]} if ticked else set())
+
+    def check_move(self):
+        if not self.folder:
+            return
+        def done(code):
+            last = self.last_check('quarantine')
+            if code != 0 or not last:
+                self.status.set('The list could not be checked. See the messages below.')
+            elif last.get('problem_count') and not self.skip.get():
+                self.status.set(f'{last["problem_count"]} files have changed since the scan, which needs a look. Untick them, or tick "Leave files that have changed", then press Move.')
+            elif last.get('ready'):
+                self.status.set(f'{last["ready"]} files are ready to move. Press Move the ticked files.')
+            else:
+                self.status.set('No files are ready to move. Ones already moved are listed under Put files back.')
+        self.app.run(self.command('quarantine', '--plan', str(self.folder)), 'Checking the list. Nothing on the website changes', done, view=self)
+
+    def move(self):
+        last = self.last_check('quarantine')
+        if not last:
+            return
+        limit = self.limit.get()
+        count = min(last['ready'], int(limit)) if limit != 'All' else last['ready']
+        if not messagebox.askyesno('WP Sentinel', f'Move {count} files out of the website?\n\nHave you backed up the site? Removing a file that a plugin or theme '
+                                   'needs can break the site. You can put files back from the Put files back tab.\n\nCheck your site straight afterwards.',
+                                   icon='warning', default='no', parent=self.top):
+            return
+        argv = self.command('quarantine', '--plan', str(self.folder), '--apply', '--plan-sha256', last['plan_sha256'])
+        argv += (['--limit', limit] if limit != 'All' else []) + (['--skip-problems'] if self.skip.get() else [])
+        def done(code):
+            self.fill_choices()
+            text = self.output.get('1.0', 'end')
+            if code == 0 and 'still to do' in text:
+                self.status.set('Done for now. Check your site, then press Check the list and Move again for the next ones.')
+            elif code == 0:
+                self.status.set('Done. Check your site now, then run a new scan from the main window. Moving files does not clear caches, end logins or close the way in.')
+            else:
+                self.status.set('Some files were not moved. See the messages below.')
+        self.app.run(argv, 'Moving files out of the website', done, view=self)
+
+    # Putting files back -----------------------------------------------------------------------------
+    def toggle_back(self, item):
+        if not item or self.app.process:
+            return
+        path = remote.quarantined_now(self.read()[1])[int(item)]['path']
+        self.back_chosen ^= {path}
+        self.refresh()
+
+    def set_backs(self, ticked):
+        if self.folder and not self.app.process:
+            self.back_chosen = set(self.back_seen) if ticked else set()
+            self.refresh()
+
+    def check_back(self):
+        if not self.folder:
+            return
+        only = self.only()
+        if not self.back_chosen:
+            self.status.set('Tick the files to put back first.')
+            return
+        if len(only) > remote.MAX_ONLY:
+            self.status.set(f'Choose at most {remote.MAX_ONLY} files at a time, or tick them all.')
+            return
+        def done(code):
+            last = self.last_check('restore', only)
+            if code != 0 or not last:
+                self.status.set('Could not check. See the messages below.')
+            elif last.get('ready'):
+                self.status.set(f'{last["ready"]} files are ready to put back. Press Put back the ticked files.')
+            else:
+                self.status.set('No files are ready to put back. See the messages below.')
+        argv = self.command('restore', '--plan', str(self.folder), *[item for path in only for item in ('--only', path)])
+        self.app.run(argv, 'Checking. Nothing on the website changes', done, view=self)
+
+    def put_back(self):
+        only = self.only()
+        last = self.last_check('restore', only)
+        if not last or not messagebox.askyesno('WP Sentinel', f'Put back {last["ready"]} files?\n\nThey become active on your website again, including any malware in them.',
+                                               icon='warning', default='no', parent=self.top):
+            return
+        argv = self.command('restore', '--plan', str(self.folder), *[item for path in only for item in ('--only', path)], '--apply', '--plan-sha256', last['plan_sha256'])
+        def done(code):
+            self.fill_choices()
+            self.status.set('Files put back. Check your site.' if code == 0 else 'Some files were not put back. See the messages below.')
+        self.app.run(argv, 'Putting files back', done, view=self)
 
 def main():
     root = tk.Tk()

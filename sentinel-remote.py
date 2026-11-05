@@ -17,6 +17,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -34,11 +35,19 @@ CONTROL_TEXT = re.compile('[\x00-\x1f\x7f]')
 LOCK_EXPIRY_SECONDS = 12 * 3600
 
 # Small programs run on the host. They receive paths as arguments and never go through a shell pipeline.
-AGENT_MAKE = "import os,sys,tempfile;os.umask(0o077);print(tempfile.mkdtemp(prefix='.sentinel-run-',dir=os.path.expanduser(sys.argv[1])))"
+# Hosts such as SiteGround name the home folder through a symlink, which the quarantine tools refuse,
+# so folders are reported by their real path.
+AGENT_MAKE = "import os,sys,tempfile;os.umask(0o077);print(os.path.realpath(tempfile.mkdtemp(prefix='.sentinel-run-',dir=os.path.expanduser(sys.argv[1]))))"
 AGENT_RECEIVE = "import sys,tarfile;t=tarfile.open(fileobj=sys.stdin.buffer,mode='r|');[t.extract(m,sys.argv[1]) for m in t if m.isfile() and '/' not in m.name and not m.name.startswith('.')]"
 AGENT_HASH = "import hashlib,json,os,sys;d=sys.argv[1];print(json.dumps({n:hashlib.sha256(open(os.path.join(d,n),'rb').read()).hexdigest() for n in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d,n))}))"
 AGENT_SEND = "import sys,tarfile;t=tarfile.open(fileobj=sys.stdout.buffer,mode='w|');t.add(sys.argv[1],arcname='report');t.close()"
 AGENT_REMOVE = "import os,re,shutil,sys;p=sys.argv[1];assert re.fullmatch(r'\\.sentinel-run-[A-Za-z0-9_]{6,}',os.path.basename(p)) and not os.path.islink(p);shutil.rmtree(p)"
+AGENT_PRIVATE = "import os,sys;os.umask(0o077);p=os.path.abspath(os.path.expanduser(sys.argv[1]));os.makedirs(p,0o700,exist_ok=True);assert not os.path.islink(p);os.chmod(p,0o700);print(os.path.realpath(p))"
+AGENT_PUT_PLAN = "import os,re,sys;d=sys.argv[1];assert re.fullmatch(r'batch-\\d{8}T\\d{6}Z-[0-9a-f]{6}',os.path.basename(d)) and os.path.isdir(d) and not os.path.islink(d);t=os.path.join(d,'plan.txt.tmp');f=open(t,'wb');f.write(sys.stdin.buffer.read());f.close();os.replace(t,os.path.join(d,'plan.txt'))"
+QUARANTINE_FILES = ('batch.py', 'quarantine.py', 'manage.py')
+BATCH_NAME = re.compile(r'batch-\d{8}T\d{6}Z-[0-9a-f]{6}')
+PLAN_FORMAT = '# sentinel-quarantine-plan-1'
+MAX_ONLY = 200
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc)
@@ -72,26 +81,31 @@ class Host:
     def agent(self, code, *values):
         return [self.python, '-I', '-S', '-c', code, *values]
 
-    def capture(self, argv, payload=None):
+    def answer(self, argv, payload=None, timeout=600):
+        """Run a command and return its result, whatever its exit code, unless ssh itself failed."""
         try:
-            result = subprocess.run(self.command(argv), input=payload, capture_output=True, timeout=600)
+            result = subprocess.run(self.command(argv), input=payload, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise RuntimeError('SSH did not finish within 10 minutes. Check --port (many hosts do not use 22; FTP is usually 21). See "IF IT WILL NOT CONNECT" in REMOTE.txt.') from None
+            raise RuntimeError(f'SSH did not finish within {timeout // 60} minutes. Check --port (many hosts do not use 22; FTP is usually 21). See "IF IT WILL NOT CONNECT" in REMOTE.txt.') from None
         if result.returncode == 255:
             # ssh's own failure. Its reason is what the user needs, once made safe to print.
             lines = [CONTROL_TEXT.sub('?', line.strip())[:200] for line in result.stderr.decode('utf-8', 'replace').splitlines() if line.strip()]
             raise RuntimeError('SSH could not connect or log in (exit 255). ' + ('SSH said: ' + ' / '.join(lines[-3:]) + '. ' if lines else '')
                                + 'Check the login name, --port (many hosts do not use 22) and --identity. See "IF IT WILL NOT CONNECT" in REMOTE.txt.')
+        return result
+
+    def capture(self, argv, payload=None):
+        result = self.answer(argv, payload)
         if result.returncode:
             # Only the exit code is reported: host output is untrusted and may carry terminal escapes.
             raise RuntimeError(f'A step on the host failed (exit {result.returncode}). Check that "{self.python}" exists there and that key-based SSH works.')
         return result.stdout
 
-def package_tar(extra):
+def package_tar(extra, names=PROGRAM_FILES):
     """Bundle the program files, and any reference ZIPs, for upload."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode='w') as tar:
-        for name in PROGRAM_FILES:
+        for name in names:
             tar.add(HERE / name, arcname=name)
         for name, path in extra.items():
             tar.add(path, arcname=name)
@@ -122,7 +136,7 @@ def safe_extract(stream, destination):
                 while remaining:
                     chunk = source.read(min(1048576, remaining))
                     if not chunk:
-                        raise ValueError('Evidence sent by the host was truncated.')
+                        raise EOFError('Evidence sent by the host was truncated.')
                     target.write(chunk)
                     remaining -= len(chunk)
     if not count:
@@ -355,6 +369,258 @@ def make_checklist(args):
     print('Checklist: ' + str(output / 'checklist.html'))
     return 0
 
+# Quarantine. The files and their store are on the host, so moving them happens there. Each step
+# uploads the quarantine programs for that step only, and brings the list and its receipt back here.
+
+def clean(value, limit=300):
+    return CONTROL_TEXT.sub('?', str(value))[:limit]
+
+def plan_entries(text):
+    """The files in a plan, with whether each is ticked. A line starting with # is left alone."""
+    entries = []
+    for line in text.splitlines():
+        parts = line.lstrip('#').lstrip(' ').split('\t')
+        if len(parts) == 4 and re.fullmatch('[a-fA-F0-9]{64}', parts[0]):
+            entries.append({'ticked': not line.startswith('#'), 'sha256': parts[0].lower(), 'priority': parts[1], 'rules': parts[2], 'path': parts[3]})
+    return entries
+
+def tick(text, chosen):
+    """The plan with only the files in chosen left to move. The rest become # lines, so they can be ticked again."""
+    lines = []
+    for line in text.splitlines():
+        parts = line.lstrip('#').lstrip(' ').split('\t')
+        if len(parts) == 4 and re.fullmatch('[a-fA-F0-9]{64}', parts[0]):
+            line = ('' if parts[3] in chosen else '#') + '\t'.join(parts)
+        lines.append(line)
+    return '\n'.join(lines) + '\n'
+
+def receipt_events(text):
+    """What a list has done so far, oldest first. The receipt comes from the host, so odd lines are ignored."""
+    events = []
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get('path'), str) and isinstance(event.get('event'), str):
+            events.append(event)
+    return events
+
+def quarantined_now(events):
+    """Files a list has moved and not put back, as batch.py's restore sees them."""
+    current = {}
+    for event in events:
+        if event['event'] == 'quarantined':
+            current[event['path']] = event
+        elif event['event'] == 'restored':
+            current.pop(event['path'], None)
+    return list(current.values())
+
+def file_states(events):
+    """The latest thing that happened to each file in a list."""
+    names = {'quarantined': 'moved', 'restored': 'put back', 'failed': 'failed'}
+    return {event['path']: names.get(event['event'], clean(event['event'], 20)) for event in events}
+
+def batch_files(folder):
+    """A list's plan and receipt as they are now, and their hashes, which a check is tied to."""
+    plan = (folder / 'plan.txt').read_bytes()
+    receipt_path = folder / 'receipt.jsonl'
+    receipt = receipt_path.read_bytes() if receipt_path.is_file() else b''
+    return plan, receipt, hashlib.sha256(plan).hexdigest(), hashlib.sha256(receipt).hexdigest()
+
+def valid_host_folder(path):
+    """An absolute folder path on the host. Drive letters are accepted for Windows test hosts."""
+    return (path.startswith('/') or re.match(r'[A-Za-z]:[\\/]', path) is not None) and '..' not in re.split(r'[\\/]', path) and not CONTROL_TEXT.search(path)
+
+def private_folder(host, args):
+    """The host folder for lists and moved files, made private if needed. It must be outside the website."""
+    path = host.capture(host.agent(AGENT_PRIVATE, args.private_dir)).decode('utf-8', 'replace').strip()
+    root = args.root.rstrip('/')
+    if not valid_host_folder(path):
+        raise RuntimeError('The host returned an unexpected private folder name; stopping.')
+    if path == root or path.startswith(root + '/'):
+        raise ValueError('--private-dir must be outside the website, such as ~/wp-sentinel-private.')
+    return path
+
+def load_batch(args):
+    """The list folder named by --plan, checked against --host and --root."""
+    folder = Path(os.path.abspath(args.plan))
+    if folder.name == 'plan.txt':
+        folder = folder.parent
+    try:
+        meta = json.loads((folder / 'batch.json').read_text(encoding='utf-8'))
+        remote_folder = str(meta['remote_folder'])
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ValueError('--plan must be a list folder made by quarantine-plan, holding batch.json and plan.txt.') from None
+    if not BATCH_NAME.fullmatch(folder.name) or folder.parent.name != 'quarantine' or meta.get('format') != 'sentinel-remote-batch-1' \
+            or not valid_host_folder(remote_folder) or not BATCH_NAME.fullmatch(remote_folder.rsplit('/', 1)[-1]):
+        raise ValueError('The folder ' + str(folder) + ' is not a list made by quarantine-plan.')
+    if meta.get('host') != args.host or meta.get('root') != args.root:
+        raise ValueError('This list is for ' + clean(meta.get('host')) + ' ' + clean(meta.get('root')) + ', not the --host and --root given.')
+    return folder, remote_folder
+
+def clean_answer(data):
+    """Keep only the counts, hashes and short messages expected from batch.py. The host is untrusted."""
+    if not isinstance(data, dict) or not isinstance(data.get('status'), str):
+        raise RuntimeError('The host sent an answer that could not be read.')
+    result = {}
+    for key, value in data.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            result[key] = value
+        elif key in ('status', 'plan_sha256') and isinstance(value, str):
+            result[key] = clean(value, 80)
+        elif key in ('problems', 'failed') and isinstance(value, list):
+            result[key] = [{'file': clean(item.get('file'), 300), 'problem': clean(item.get('problem'), 300)} for item in value[:100] if isinstance(item, dict)]
+        elif key in ('by_priority', 'skipped') and isinstance(value, dict):
+            result[key] = {clean(name, 120): count for name, count in list(value.items())[:50] if isinstance(count, int) and not isinstance(count, bool)}
+    return result
+
+def run_batch(host, run_path, action, tail):
+    """Run batch.py on the host and return its exit code and checked answer."""
+    result = host.answer([host.python, '-B', '-I', '-S', run_path + '/batch.py', action] + tail, timeout=3600)
+    if result.returncode == 2:
+        lines = [clean(line.strip()) for line in result.stderr.decode('utf-8', 'replace').splitlines() if line.strip()]
+        raise RuntimeError('On the host: ' + (re.sub('^Stopped: ', '', lines[0]) if lines else 'no reason was given.'))
+    if result.returncode not in (0, 3):
+        raise RuntimeError(f'A step on the host failed (exit {result.returncode}). Check that "{host.python}" exists there.')
+    try:
+        return result.returncode, clean_answer(json.loads(result.stdout))
+    except ValueError:
+        raise RuntimeError('The host sent an answer that could not be read.') from None
+
+def sync_receipt(host, remote_folder, folder, plan):
+    """Bring back the host's receipt, which records every file moved or put back."""
+    incoming = folder / ('.incoming-' + os.urandom(4).hex())
+    incoming.mkdir(mode=0o700)
+    try:
+        pull_folder(host, remote_folder, incoming)
+        if not (incoming / 'plan.txt').is_file() or (incoming / 'plan.txt').read_bytes() != plan:
+            print('WARNING: the list on the host differs from the one sent. The host may be altering files.', file=sys.stderr, flush=True)
+        if (incoming / 'receipt.jsonl').is_file():
+            os.replace(incoming / 'receipt.jsonl', folder / 'receipt.jsonl')
+    finally:
+        shutil.rmtree(incoming, ignore_errors=True)
+
+def next_command(args, action, folder, *more):
+    connection = ['--host', args.host] + (['--port', str(args.port)] if args.port else []) + (['--identity', str(args.identity)] if args.identity else [])
+    return shlex.join(['python', 'sentinel-remote.py', action] + connection + ['--root', args.root, '--plan', str(folder), *more])
+
+def quarantine_plan(args):
+    """Make a list of files to move from one saved scan. Nothing on the website changes."""
+    run_dir = Path(os.path.abspath(args.run))
+    site_dir = run_dir.parent
+    if not RUN_FOLDER.fullmatch(run_dir.name) or not (run_dir / 'report.json').is_file():
+        raise ValueError('--run must be a run folder holding report.json, such as sentinel-evidence/SITE/20261101T204908Z-c29d80')
+    if site_dir != site_directory(site_dir.parent, args.host, args.root):
+        raise ValueError('That scan is of another site, or of another --host or --root.')
+    try:
+        record = json.loads((run_dir / 'EVIDENCE.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise ValueError('That scan was never sealed, so it cannot be used for a list. Scan again.') from None
+    changed = changed_files(run_dir, record)
+    if changed or 'report.json' not in record.get('files', {}):
+        raise ValueError('That scan has changed since it was sealed, so it cannot be used for a list. ' + '; '.join(changed[:3]))
+    host = Host(args)
+    name = 'batch-' + now().strftime('%Y%m%dT%H%M%SZ') + '-' + os.urandom(3).hex()
+    folder = site_dir / 'quarantine' / name
+    with run_lock(site_dir):
+        remote_folder = private_folder(host, args) + '/' + name
+        with host_folder(host, args, QUARANTINE_FILES, {'report.json': run_dir / 'report.json'}) as (run_path, _):
+            print('Making the list on the host. Nothing on the website changes.', flush=True)
+            tail = ['--root', args.root, '--report', run_path + '/report.json', '--output', remote_folder, '--priority', args.priority]
+            _, answer = run_batch(host, run_path, 'plan', tail + (['--include-critical'] if args.include_critical else []))
+            folder.mkdir(parents=True, mode=0o700)
+            pull_folder(host, remote_folder, folder)
+        if not (folder / 'plan.txt').is_file() or not (folder / 'plan.txt').read_bytes().startswith(PLAN_FORMAT.encode()):
+            raise RuntimeError('The host sent back something that is not a quarantine list.')
+        (folder / 'batch.json').write_text(json.dumps({'format': 'sentinel-remote-batch-1', 'host': args.host, 'root': args.root, 'remote_folder': remote_folder,
+                                                       'run': run_dir.name, 'priority': args.priority, 'include_critical': args.include_critical,
+                                                       'created_utc': now().isoformat()}, indent=2), encoding='utf-8')
+    entries = plan_entries((folder / 'plan.txt').read_text(encoding='utf-8', errors='replace'))
+    counts = {level: sum(entry['priority'] == level for entry in entries) for level in ('high', 'medium', 'review')}
+    print(f'Made a list of {len(entries)} files to move out of the website: ' + ', '.join(f'{count} {level}' for level, count in counts.items() if count) + '.' if entries else 'No files qualify for the list.')
+    print(f'{sum(answer.get("skipped", {}).values())} findings were left out; skipped.txt says why.')
+    print('Nothing on the website has changed.')
+    print('List: ' + str(folder))
+    if entries:
+        print('Read plan.txt there. To spare a file, start its line with #. Then check the list:')
+        print('  ' + next_command(args, 'quarantine', folder))
+    return 0
+
+def batch_step(args, action):
+    """Check a list on the host, or with --apply move its files out (quarantine) or put them back (restore)."""
+    folder, remote_folder = load_batch(args)
+    store = remote_folder.rsplit('/', 1)[0] + '/quarantine-store'
+    only = getattr(args, 'only', [])
+    if len(only) > MAX_ONLY:
+        raise ValueError(f'Use --only for at most {MAX_ONLY} files at a time, or leave it out to put back everything.')
+    if getattr(args, 'limit', None) is not None and args.limit < 1:
+        raise ValueError('--limit must be at least 1.')
+    host = Host(args)
+    with run_lock(folder.parent.parent):
+        plan, _, plan_sha, _ = batch_files(folder)
+        if args.apply and (args.plan_sha256 or '').lower() != plan_sha:
+            raise ValueError('--apply needs --plan-sha256 from checking this exact list. The list has changed, or the hash is wrong: check it again. Nothing was changed.')
+        with host_folder(host, args, QUARANTINE_FILES, {}) as (run_path, _):
+            try:
+                host.capture(host.agent(AGENT_PUT_PLAN, remote_folder), plan)
+            except RuntimeError:
+                raise RuntimeError('This list\'s folder was not found on the host (' + remote_folder + '). Make a new list.') from None
+            tail = ['--root', args.root, '--store', store, '--plan', remote_folder + '/plan.txt'] + (['--apply', '--plan-sha256', plan_sha] if args.apply else [])
+            if action == 'quarantine':
+                tail += (['--limit', str(args.limit)] if args.limit else []) + (['--skip-problems'] if args.skip_problems else [])
+            for path in only:
+                tail += ['--only', path]
+            print({'quarantine': 'Moving files out of the website...', 'restore': 'Putting files back...'}[action] if args.apply else 'Checking the list on the host. Nothing on the website changes.', flush=True)
+            try:
+                code, answer = run_batch(host, run_path, action, tail)
+            finally:
+                # Whatever happened, the receipt is wanted here: it records every file moved so far.
+                try:
+                    sync_receipt(host, remote_folder, folder, plan)
+                except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+                    print('WARNING: could not copy back the receipt: ' + clean(error), file=sys.stderr, flush=True)
+        if answer.get('plan_sha256') != plan_sha:
+            raise RuntimeError('The host worked from a different list from the one sent. It may be altering files; stop and investigate.')
+        check = folder / 'last-check.json'
+        check.unlink(missing_ok=True)
+        if not args.apply:
+            receipt_sha = batch_files(folder)[3]
+            check.write_text(json.dumps(dict(answer, action=action, only=sorted(only), receipt_sha256=receipt_sha, checked_utc=now().isoformat()), indent=2), encoding='utf-8')
+    show_step(args, action, folder, answer)
+    return code
+
+def show_step(args, action, folder, answer):
+    get = lambda key: answer.get(key, 0)
+    for item in answer.get('problems', []) + answer.get('failed', []):
+        print(f'  {item["file"]}: {item["problem"]}')
+    status = answer.get('status', '')
+    if action == 'quarantine' and not args.apply:
+        print(f'Checked: {get("ready")} files ready to move, {get("already_in_store")} already moved, {get("problem_count")} with problems.')
+        if get('problem_count'):
+            print('Files with problems stop the whole list. Usually they have changed since the scan, which needs a look. Spare them (start their line with #), or add --skip-problems to leave them where they are.')
+        print('Nothing on the website has changed.')
+        if get('ready'):
+            print('To move them: ' + next_command(args, 'quarantine', folder, '--apply', '--plan-sha256', answer['plan_sha256']))
+    elif action == 'quarantine':
+        if status == 'stopped-before-changes':
+            print(f'Nothing was moved: {get("problem_count")} files differ from the list. Check the list again.')
+        else:
+            print(f'Moved {get("moved")} files out of the website. {get("failed_count")} failed.' + (f' {get("still_to_do")} still to do: check the list again and move the next ones.' if get('still_to_do') else ''))
+            if status == 'stopped-after-repeated-failures':
+                print('Stopped after 5 failures in a row, which usually means a problem such as a full disk.')
+            print('Check the site now, then scan again. Moving files does not clear caches, end logins or close the way in.')
+            print('To put files back: ' + next_command(args, 'restore', folder))
+    elif not args.apply:
+        print(f'Checked: {get("ready")} files ready to put back, {get("problem_count")} with problems. Nothing on the website has changed.')
+        if get('ready'):
+            print('Putting files back makes them active again, including any malware among them.')
+            print('To put them back: ' + next_command(args, 'restore', folder, *[item for path in getattr(args, 'only', []) for item in ('--only', path)], '--apply', '--plan-sha256', answer['plan_sha256']))
+    else:
+        print(f'Put back {get("restored")} files. {get("failed_count")} failed. Their copies stay in the private folder on the host.')
+
 def remote_scan_arguments(args, run_path, references):
     tail = [args.remote_python, '-I', '-S', run_path + '/sentinel.py', '--root', args.root, '--output', run_path + '/report',
             '--file-inventory', '--max-file-mb', str(args.max_file_mb)]
@@ -428,6 +694,52 @@ def scan(args):
         raise
     return monitoring.EXIT_ALERT_FAILED if alert_failed else code
 
+@contextlib.contextmanager
+def host_folder(host, args, names, extra):
+    """A temporary folder on the host holding these program files, checked after upload and removed afterwards."""
+    print('Creating a temporary folder on the host...', flush=True)
+    run_path = host.capture(host.agent(AGENT_MAKE, args.remote_temp)).decode('ascii', 'replace').strip()
+    if not valid_run_path(run_path):
+        raise RuntimeError('The host returned an unexpected temporary folder name; stopping.')
+    try:
+        print('Uploading Sentinel ' + str(len(names)) + ' program files...', flush=True)
+        host.capture(host.agent(AGENT_RECEIVE, run_path), package_tar(extra, names))
+        reported = json.loads(host.capture(host.agent(AGENT_HASH, run_path)))
+        expected = file_hashes(names, extra)
+        if reported != expected:
+            raise RuntimeError('Uploaded files do not match on the host; stopping before anything ran. The host may be altering files.')
+        yield run_path, expected
+    finally:
+        try:
+            host.capture(host.agent(AGENT_REMOVE, run_path))
+            print('Temporary folder removed from the host.', flush=True)
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            print('WARNING: could not remove the temporary folder on the host: ' + run_path, file=sys.stderr, flush=True)
+
+def pull_folder(host, remote_path, destination):
+    """Copy the plain files in one host folder into destination, which must not already hold them.
+    Some hosts' connections now and then cut a copy short, so a cut-off copy is tried once more."""
+    before = set(destination.iterdir())
+    for attempt in (1, 2):
+        process = subprocess.Popen(host.command(host.agent(AGENT_SEND, remote_path)), stdout=subprocess.PIPE)
+        try:
+            try:
+                safe_extract(process.stdout, destination)
+                process.stdout.read()
+            finally:
+                process.stdout.close()
+                sent = process.wait(timeout=120)
+            if not sent:
+                return
+            problem = f'exit {sent}'
+        except (tarfile.TarError, EOFError) as error:
+            problem = str(error)
+        for path in set(destination.iterdir()) - before:
+            path.unlink()
+        if attempt == 1:
+            print('Copying back was cut off part way; trying once more...', flush=True)
+    raise RuntimeError(f'Copying the files back was cut off twice ({clean(problem, 120)}). Run it again.')
+
 def run_scan(args):
     if not valid_remote_root(args.root):
         raise ValueError('--root must be an absolute path on the host.')
@@ -447,39 +759,14 @@ def run_scan(args):
     run_dir = site_dir / (started.strftime('%Y%m%dT%H%M%SZ') + '-' + os.urandom(3).hex())
     run_dir.mkdir(mode=0o700)
     print('Evidence folder: ' + str(run_dir), flush=True)
-    print('Creating a temporary folder on the host...', flush=True)
-    run_path = host.capture(host.agent(AGENT_MAKE, args.remote_temp)).decode('ascii', 'replace').strip()
-    if not valid_run_path(run_path):
-        raise RuntimeError('The host returned an unexpected temporary folder name; stopping.')
-    code = 2
-    try:
-        print('Uploading Sentinel ' + str(len(PROGRAM_FILES)) + ' program files...', flush=True)
-        host.capture(host.agent(AGENT_RECEIVE, run_path), package_tar(extra))
-        reported = json.loads(host.capture(host.agent(AGENT_HASH, run_path)))
-        expected = file_hashes(PROGRAM_FILES, extra)
-        if reported != expected:
-            raise RuntimeError('Uploaded files do not match on the host; stopping before the scan. The host may be altering files.')
+    with host_folder(host, args, PROGRAM_FILES, extra) as (run_path, expected):
         print('Scanning. Output from here on comes from the host.', flush=True)
         # A terminal is only needed for the hidden database password prompt.
         code = subprocess.run(host.command(remote_scan_arguments(args, run_path, references), tty=args.database)).returncode
         if code not in (0, 3, 4):
             raise RuntimeError(f'The scan on the host stopped (exit {code}).')
         print('Copying the evidence back...', flush=True)
-        process = subprocess.Popen(host.command(host.agent(AGENT_SEND, run_path + '/report')), stdout=subprocess.PIPE)
-        try:
-            safe_extract(process.stdout, run_dir)
-            process.stdout.read()
-        finally:
-            process.stdout.close()
-            sent = process.wait(timeout=120)
-        if sent:
-            raise RuntimeError(f'Copying the evidence failed (exit {sent}).')
-    finally:
-        try:
-            host.capture(host.agent(AGENT_REMOVE, run_path))
-            print('Temporary folder removed from the host.', flush=True)
-        except (RuntimeError, OSError, subprocess.TimeoutExpired):
-            print('WARNING: could not remove the temporary folder on the host: ' + run_path, file=sys.stderr, flush=True)
+        pull_folder(host, run_path + '/report', run_dir)
     comparison, note = compare_with_previous(site_dir, run_dir)
     timeline_problem = write_timeline(run_dir)
     vuln_line = write_vulns(run_dir, evidence, args)
@@ -807,6 +1094,27 @@ def parser():
     c.add_argument('--apply', action='store_true', help='Permanently remove the folders listed in the preview')
     c = sub.add_parser('checklist', allow_abbrev=False, help='Build a post-incident checklist from one run')
     c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
+    def quarantining(c):
+        connection(c)
+        c.add_argument('--root', required=True, help='Absolute path of the WordPress site on the host')
+        c.add_argument('--remote-temp', default='~', help='Host folder for the temporary run folder. Must be outside every website.')
+    c = sub.add_parser('quarantine-plan', allow_abbrev=False, help='Make a list of files to move out of the website, from a saved scan. Changes nothing')
+    quarantining(c)
+    c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
+    c.add_argument('--priority', choices=('high', 'medium', 'review'), default='high', help='Include findings at this priority or higher')
+    c.add_argument('--include-critical', action='store_true', help='Allow files WordPress needs in order to run')
+    c.add_argument('--private-dir', default='~/wp-sentinel-private', help='Private folder on the host, outside every website, for lists and moved files')
+    for name, text in (('quarantine', 'Check a list, or with --apply move its files out of the website'), ('restore', 'Check, or with --apply put back, files a list moved')):
+        c = sub.add_parser(name, allow_abbrev=False, help=text)
+        quarantining(c)
+        c.add_argument('--plan', type=Path, required=True, help='The list folder made by quarantine-plan')
+        c.add_argument('--apply', action='store_true')
+        c.add_argument('--plan-sha256', help='From checking this exact list')
+        if name == 'quarantine':
+            c.add_argument('--limit', type=int, help='Move at most this many files now; check again and repeat for the rest')
+            c.add_argument('--skip-problems', action='store_true', help='Leave files that differ from the list where they are, and move the rest')
+        else:
+            c.add_argument('--only', action='append', default=[], help='Put back only this file, relative to the site; repeatable')
     c = sub.add_parser('alert-test', allow_abbrev=False, help='Send a test alert')
     c.add_argument('--alert-config', type=Path, required=True)
     c.add_argument('--site-name', default='test')
@@ -829,12 +1137,13 @@ ADMIN_WARNING = ('WARNING: this window is running as administrator. Evidence fol
 def main(argv=None):
     args = parser().parse_args(argv)
     os.umask(0o077)
-    if args.action in ('scan', 'scan-all', 'checklist') and elevated():
+    if args.action in ('scan', 'scan-all', 'checklist', 'quarantine-plan') and elevated():
         print(ADMIN_WARNING, file=sys.stderr, flush=True)
     if getattr(args, 'start', False) is None:
         args.start = ['~']
     try:
-        return {'scan': scan, 'discover': discover, 'scan-all': scan_all, 'verify': verify, 'prune': prune, 'checklist': make_checklist, 'alert-test': alert_test}[args.action](args)
+        return {'scan': scan, 'discover': discover, 'scan-all': scan_all, 'verify': verify, 'prune': prune, 'checklist': make_checklist, 'alert-test': alert_test,
+                'quarantine-plan': quarantine_plan, 'quarantine': lambda a: batch_step(a, 'quarantine'), 'restore': lambda a: batch_step(a, 'restore')}[args.action](args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print('Stopped: ' + str(error), file=sys.stderr)
         return 2

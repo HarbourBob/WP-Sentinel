@@ -1,4 +1,4 @@
-# WP Sentinel 0.24.0-rc1: Feature List
+# WP Sentinel 0.25.0-rc1: Feature List
 
 > **Back up your site first, if at all possible.** Keep the backup away from the website.
 
@@ -85,6 +85,9 @@ Every action below previews first and needs `--apply` to make a change.
   the host after each run, and keeps the evidence off the host.
 - **From a window (prototype):** `sentinel-app.py` runs the same scan without the command
   line: fill in the SSH details, test the connection, scan, and open the results.
+- **Quarantine from your computer:** make a list from a saved scan, untick what to keep,
+  check it, then move the files out and put them back, with nothing left installed on
+  the host. From the command line or the app's Quarantine window.
 - **Whole account:** `discover` finds every WordPress install. `scan-all` scans each one,
   with a summary page and one combined alert, and reports installs that appear or
   disappear.

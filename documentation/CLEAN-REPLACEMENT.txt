@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1 - CLEAN REPLACEMENT
+WORDPRESS SENTINEL 0.25.0-rc1 - CLEAN REPLACEMENT
 
 Swap reported core, plugin and theme files for clean copies, and swap them back if
 you need to. This is for files the site needs. Quarantine (BATCH-QUARANTINE.txt) is

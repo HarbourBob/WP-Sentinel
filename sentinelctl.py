@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WordPress Sentinel 0.24.0-rc1: one entry point, explicit operations."""
+"""WordPress Sentinel 0.25.0-rc1: one entry point, explicit operations."""
 import argparse
 import datetime
 import importlib.util

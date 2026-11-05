@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1 - SCHEDULED CHECKS AND ALERTS
+WORDPRESS SENTINEL 0.25.0-rc1 - SCHEDULED CHECKS AND ALERTS
 
 Run checks on a schedule and hear about them only when something is new. Sentinel
 never installs a schedule itself: you add it, as shown below, and you can remove it.

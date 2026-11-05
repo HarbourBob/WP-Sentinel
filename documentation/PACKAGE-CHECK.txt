@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1 - PACKAGE VERIFICATION
+WORDPRESS SENTINEL 0.25.0-rc1 - PACKAGE VERIFICATION
 
 Upload the program files directly into compat/wp-sentinel, keeping the documentation
 folder beside them. Include package-manifest.json and verify-package.py. The tools

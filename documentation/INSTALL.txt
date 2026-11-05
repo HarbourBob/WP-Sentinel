@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1 — INSTALLATION AND ROUTINE USE
+WORDPRESS SENTINEL 0.25.0-rc1 — INSTALLATION AND ROUTINE USE
 
 To scan without installing anything on the host, see REMOTE.txt. The steps below
 install Sentinel on the host, which you need for quarantine and restore.

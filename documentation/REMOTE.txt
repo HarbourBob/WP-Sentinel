@@ -1,4 +1,4 @@
-WORDPRESS SENTINEL 0.24.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
+WORDPRESS SENTINEL 0.25.0-rc1 — RUNNING FROM YOUR OWN COMPUTER
 
 sentinel-remote.py runs on your computer. It connects with ssh, uploads the scanner
 to a temporary folder on the host, runs it, copies the evidence back, removes the
@@ -88,11 +88,48 @@ LIMITS: WHAT THIS DOES NOT PROVE
 - Evidence sent back is treated as untrusted: only plain files with simple names are
   accepted, up to 50 files and 1 GiB.
 
-Quarantine and restore still run on the host, because their private store must be
-there. Keep a hosted install for those (see INSTALL.txt). The commands shown in a
-remote report apply to that hosted install, with your profile, such as ../site.json, in place of PROFILE,
-and report paths must be on the host for the review command. BATCH-QUARANTINE.txt
-shows how to copy a report up for a batch.
+QUARANTINE FROM YOUR OWN COMPUTER
+
+Moving files out has to happen on the host, where the files are, and the moved files
+are kept there, in a private folder outside the website: wp-sentinel-private in your
+home folder, or --private-dir. As with a scan, the programs are uploaded for each step
+and removed afterwards. The list and its receipt are copied back here, into a
+quarantine folder beside the site's runs. Every file still goes through the checks in
+QUARANTINE.txt and BATCH-QUARANTINE.txt, which apply here too. sentinel-app.py does
+the same from a window; see APP.txt.
+
+1. Make a list from a saved scan. This changes nothing on the website.
+
+   python sentinel-remote.py quarantine-plan --host user@example.com --root /home/user/public_html --run sentinel-evidence/SITE/RUN
+
+   --priority medium or review adds lower priorities; high is the default.
+   --include-critical allows files WordPress needs. The scan must be sealed and
+   unchanged since. The command prints the list's folder.
+
+2. Read plan.txt in that folder. To spare a file, start its line with #. Then check:
+
+   python sentinel-remote.py quarantine --host user@example.com --root /home/user/public_html --plan LIST-FOLDER
+
+   This prints the list's SHA-256. Editing the list changes it, so check again.
+
+3. Move the files. This changes the website:
+
+   python sentinel-remote.py quarantine ... --plan LIST-FOLDER --apply --plan-sha256 HASH
+
+   --limit 50 moves at most 50 files; check and run again for the rest.
+   --skip-problems leaves files that differ from the list where they are.
+
+To put files back, use restore the same way: without --apply it checks, and --only,
+repeatable, puts back just those files.
+
+   python sentinel-remote.py restore ... --plan LIST-FOLDER --only wp-content/some/file.php
+
+Keep wp-sentinel-private on the host: restore needs the list and the moved files there.
+
+A hosted install (INSTALL.txt) is still needed for single-file quarantine by ID, clean
+replacement and database changes. The commands shown in a remote report apply to that
+hosted install, with your profile, such as ../site.json, in place of PROFILE, and report
+paths must be on the host for the review command.
 
 IF IT WILL NOT CONNECT
 
@@ -124,8 +161,9 @@ icacls sentinel-evidence /grant "${env:USERNAME}:(OI)(CI)F" /T
 TESTING STATUS
 
 Run successfully against a real host over real SSH by the project owner in October
-2026. Quoting, cleanup, tampering and unsafe evidence are tested on Windows with a
-stand-in for ssh. For a run with --database, check its result on your own host.
+2026. Quarantine and restore of a harmless test file were run the same way in November
+2026. Quoting, cleanup, tampering, unsafe evidence and cut-off copies are tested on
+Windows with a stand-in for ssh. For a run with --database, check its result on your own host.
 
 For scheduled runs, alerts and removing old runs, see MONITORING.txt. To scan every
 install on the account, see ACCOUNT.txt.

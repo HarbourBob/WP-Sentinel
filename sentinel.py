@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
-VERSION = '0.24.0-rc1'
+VERSION = '0.25.0-rc1'
 SEVERITIES = ('high', 'medium', 'review', 'info')
 PHP_SUFFIXES = {'.php', '.phtml', '.php3', '.php4', '.php5', '.php7', '.php8', '.phar', '.pht', '.phtm', '.phps'}
 SCRIPT_SUFFIXES = {'.js', '.html', '.htm', '.svg'}

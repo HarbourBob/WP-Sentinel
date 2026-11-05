@@ -1,7 +1,8 @@
-WORDPRESS SENTINEL 0.24.0-rc1 — SCANNING FROM A WINDOW (PROTOTYPE)
+WORDPRESS SENTINEL 0.25.0-rc1 — SCANNING AND QUARANTINE FROM A WINDOW (PROTOTYPE)
 
 sentinel-app.py is a window for sentinel-remote.py. You fill in your site's SSH details
-once, press Scan, and the report opens in your browser. It runs exactly the same scan as
+once, press Scan, and the report opens in your browser. A second window moves files the
+scan found out of the website, and puts them back. It runs exactly the same scan as
 the command line, over SSH from your computer, and keeps the sealed evidence on your
 computer. Nothing is installed on the website. See REMOTE.txt for how that works.
 
@@ -46,6 +47,46 @@ saved evidence confirms that no saved scan has changed since it was sealed.
 The vulnerability check needs a Wordfence key file; see VULNERABILITIES.txt. The database
 check reads the database details from wp-config.php on the server; see REMOTE.txt.
 
+QUARANTINE: MOVING FILES OUT, AND PUTTING THEM BACK
+
+Quarantine moves files out of your website into a private folder on your hosting
+account, wp-sentinel-private in your home folder there, outside the website. Nothing is
+deleted, and you can put files back. Back up your site first: removing a file that a
+plugin or theme needs can break the site. Read the findings in the report before you
+start, and look at any file you are unsure about.
+
+Press Quarantine, under Latest scan. A window opens for the site filled in.
+
+1. Make a list. Choose which priorities to include. High priority only is the default
+   and the safest start. Press Make a list. Nothing on the website changes yet.
+   Files WordPress needs in order to run, such as wp-config.php and anything in
+   wp-admin or wp-includes, are left out unless you tick that box. They usually need a
+   clean copy, not removing: see CLEAN-REPLACEMENT.txt. Findings in the database are
+   left out too, because quarantine moves files only; they are often script tags added
+   by page builders or analytics. What was left out shows every finding not in the
+   list, with the reason. Those still need dealing with.
+2. Untick any file you want to keep. Each click changes the list.
+3. Press Check the list. Sentinel checks every ticked file on the server against the
+   scan. Nothing changes yet. A file that has changed since the scan is a problem, and
+   stops the whole list: it may mean an attacker is still active, so look at it. Untick
+   it, or tick "Leave files that have changed", which leaves those where they are.
+4. Press Move the ticked files. It only works after a check of exactly this list: any
+   change to the ticks locks it again until you check once more. You are asked to
+   confirm. Choose How many at once to go in stages, and check your site between them.
+5. Check your site straight away, then scan again from the main window. Quarantine does
+   not clear caches, end logins or close the way the attacker got in. Use the Checklist.
+
+To put files back, open the Put files back tab. It lists the files this list has moved.
+Tick the ones you want, press Check, then Put back the ticked files. Putting a file back
+makes it active again, including any malware in it. Restore the files you need, usually
+just the one the site needs to run, not the whole list.
+
+Each list is kept with your evidence, in a quarantine folder beside the site's scans,
+with a receipt of every file moved and put back. Its copy on the server is needed to put
+files back, so leave wp-sentinel-private alone. Lists you made before can be opened from
+List. Stopping part way is safe: files already moved stay moved, and checking the list
+again carries on from where it stopped.
+
 UNLOCKING YOUR KEY
 
 Unlock key uses Windows' OpenSSH Authentication Agent. If the window says the agent is not
@@ -70,12 +111,16 @@ IF IT GOES WRONG
 after 60 seconds                  port 21, which is FTP. SiteGround uses 18765.
 Stop during a scan                The temporary .sentinel-run- folder may be left in your
                                   home folder on the server; delete it.
+"Store is locked"                 A quarantine step was stopped part way. If nothing is
+                                  running, see "INTERRUPTIONS" in QUARANTINE.txt.
+"list's folder was not found"     Its copy on the server was removed. Make a new list.
 
 LIMITS OF THIS PROTOTYPE
 
-It covers scanning one site, checking evidence and opening the results. Scanning every
-site on an account, quarantine, clean replacement, alerts and scheduled runs still use the
-command line. Scans run with --unattended, so they never stop to ask a question; the
+It covers scanning one site, checking evidence, opening the results, and quarantine of
+the files in a scan. Scanning every site on an account, clean replacement, database
+changes, alerts and scheduled runs still use the command line. Put back at most 200
+chosen files at a time, or tick them all. Scans run with --unattended, so they never stop to ask a question; the
 database check therefore always reads wp-config.php instead of prompting. On Mac and Linux
 the window works, but Unlock key and confirming the server show a command to run in a
 terminal instead.

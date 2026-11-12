@@ -153,6 +153,13 @@ log in to your hosting account, so a passphrase is better.
 IF IT GOES WRONG
 
 "has not met this server before"  Confirm the server, as in step 3.
+"not the one this computer        The server's identity has changed, usually because your
+remembers"                        host moved your site to a new server. Ask your host to
+                                  confirm the move, then let the app remove the old record
+                                  and confirm the new server, as in step 3.
+"private key file could not be    Choose the private key, not the .pub file. A key pasted
+read"                             into Notepad must end with a line break after its
+                                  -----END line.
 "refused the login"               Wrong username or key, or the key is locked: press
                                   Unlock key.
 "Could not connect", or no answer Check the server name and the port. SSH is usually not

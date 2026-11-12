@@ -298,6 +298,9 @@ class App:
             text = self.output.get('1.0', 'end')
             if code == 0:
                 self.status.set('Connected. Ready to scan.')
+            elif 'REMOTE HOST IDENTIFICATION HAS CHANGED' in text:
+                # SSH refuses outright here: there is nothing to type yes to.
+                self.changed_server(s, text)
             elif 'Host key verification failed' in text or 'host key' in text.lower():
                 self.status.set('This computer has not met this server before.')
                 if messagebox.askyesno('WP Sentinel', 'This computer has not connected to this server before, so SSH needs you to confirm it once.\n\n'
@@ -305,6 +308,9 @@ class App:
                                        'check they match, then type yes.'):
                     self.console('Confirm the server. Type yes if the fingerprint is right; then this window can be closed.',
                                  self.ssh_base(s) + ['-T', s['target'], 'exit'])
+            elif 'Load key' in text and 'invalid format' in text:
+                self.status.set('Your private key file could not be read. Check you chose the private key, not the public one. '
+                                'If you pasted it into Notepad, it must end with a line break after the END line.')
             elif 'Permission denied' in text:
                 self.status.set('The server refused the login. Check the username and key, or press Unlock key first.')
             elif code == -1:
@@ -314,6 +320,29 @@ class App:
         self.run(argv, 'Connecting', done)
         # Windows ssh has no quick connect timeout, so a wrong port is caught here instead.
         self.root.after(60000, lambda p=self.process: p and p.poll() is None and p is self.process and (p.terminate(), self.lines.put(('line', 'No answer after 60 seconds: check the port.\n'))))
+
+    def changed_server(self, s, text):
+        """The server presented a different identity from the one this computer remembers."""
+        self.status.set('The server is not the one this computer remembers, so SSH refused to connect.')
+        found = re.search(r'SHA256:[A-Za-z0-9+/]+', text)
+        name = s['target'].split('@', 1)[1]
+        entry = name if s['port'] == '22' else f'[{name}]:{s["port"]}'
+        if not messagebox.askyesno('WP Sentinel', 'The server is not the one this computer remembers, so SSH refused to connect.\n\n'
+                                   'Usually this is harmless: your host has moved your site to a new server. Rarely, it means someone is '
+                                   'intercepting the connection. So before carrying on, ask your host whether your site was moved recently.\n\n'
+                                   + (f'The server now gives this fingerprint:\n{found[0]}\n\n' if found else '')
+                                   + 'Once you are sure, remove the old record? Then press Test connection again and confirm the new server, '
+                                   'as for a first connection.', icon='warning', default='no'):
+            return
+        try:
+            # ssh-keygen keeps the previous list as known_hosts.old.
+            result = subprocess.run(['ssh-keygen', '-R', entry], capture_output=True, timeout=20, creationflags=QUIET)
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode == 0:
+            self.status.set('Old record removed. Press Test connection, and confirm the new server when asked.')
+        else:
+            self.status.set('The old record could not be removed. See "IF IT GOES WRONG" in documentation/APP.txt.')
 
     def scan(self):
         s = self.settings()
@@ -401,7 +430,26 @@ class App:
         else:
             webbrowser.open(folder.as_uri())
 
-TICKED, UNTICKED = '☑', '☐'
+def tick_box_image(master, ticked):
+    """A tick box drawn like the Windows ones on the main window: grey-edged when empty,
+    blue with a white tick when ticked. Sized for the screen's scaling."""
+    scale = float(master.tk.call('tk', 'scaling')) / (96 / 72)
+    size = max(13, round(14 * scale))
+    blue, grey, white = '#0067C0', '#666666', '#FFFFFF'
+    img = tk.PhotoImage(master=master, width=size, height=size)
+    img.put(blue if ticked else grey, to=(0, 0, size, size))
+    img.put(blue if ticked else white, to=(1, 1, size - 1, size - 1))
+    for x, y in ((0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)):
+        img.transparency_set(x, y, True)
+    if ticked:
+        s, pen = size / 14, max(2, round(1.6 * size / 14))
+        points = ((3.2, 7.2), (6, 10), (11, 4.2))
+        for (x1, y1), (x2, y2) in zip(points, points[1:]):
+            steps = int(max(abs(x2 - x1), abs(y2 - y1)) * s * 2) + 1
+            for i in range(steps + 1):
+                x, y = int((x1 + (x2 - x1) * i / steps) * s), int((y1 + (y2 - y1) * i / steps) * s)
+                img.put(white, to=(x, y, min(size - 1, x + pen), min(size - 1, y + pen)))
+    return img
 PRIORITIES = (('high', 'High priority only'), ('medium', 'High and medium'), ('review', 'Everything that needs review'))
 # The words each window uses. The steps behind them are the same: make a list, check it, apply it, undo it.
 WORDS = {
@@ -466,6 +514,7 @@ class ListWindow:
         top.minsize(860, 720)
         # Big enough rows for the tick boxes to be easy to see and click.
         ttk.Style(top).configure('Treeview', rowheight=24, font=('Segoe UI', 10))
+        self.boxes = {True: tick_box_image(top, True), False: tick_box_image(top, False)}
         frame = ttk.Frame(top, padding=12)
         frame.pack(fill='both', expand=True)
         frame.columnconfigure(0, weight=1)
@@ -561,17 +610,22 @@ class ListWindow:
         self.refresh()
 
     def tree(self, parent, columns, toggle):
+        """A list whose first column holds tick boxes. Pictures can only go in a list's own
+        first column (#0), so the boxes live there and the other columns follow."""
         box = ttk.Frame(parent)
         box.pack(fill='both', expand=True)
-        tree = ttk.Treeview(box, columns=[c[0] for c in columns], show='headings', height=10, selectmode='none')
-        for name, heading, width in columns:
+        (_, tick_heading, tick_width), rest = columns[0], columns[1:]
+        tree = ttk.Treeview(box, columns=[c[0] for c in rest], show='tree headings', height=10, selectmode='none')
+        tree.heading('#0', text=tick_heading, anchor='w')
+        tree.column('#0', width=tick_width, minwidth=tick_width, stretch=False, anchor='w')
+        for name, heading, width in rest:
             tree.heading(name, text=heading, anchor='w')
             tree.column(name, width=width, stretch=name == 'path', anchor='w')
         scroll = ttk.Scrollbar(box, orient='vertical', command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
         tree.pack(side='left', fill='both', expand=True)
         scroll.pack(side='left', fill='y')
-        tree.bind('<Button-1>', lambda event: tree.identify_region(event.x, event.y) == 'cell' and toggle(tree.identify_row(event.y)))
+        tree.bind('<Button-1>', lambda event: tree.identify_region(event.x, event.y) in ('tree', 'cell') and toggle(tree.identify_row(event.y)))
         return tree
 
     def close(self):
@@ -647,7 +701,8 @@ class ListWindow:
         for number, entry in enumerate(entries):
             second = remote.clean(entry['priority'], 20) if self.kind == 'quarantine' else source_text(remote.clean(entry['source'], 80))
             rules = remote.clean(entry['rules'], 120).replace(',', ', ') + (' (missing: put back)' if entry['sha256'] == 'missing' else '')
-            self.move_tree.insert('', 'end', iid=str(number), values=(TICKED if entry['ticked'] else UNTICKED, second, remote.clean(entry['path']), rules, states.get(entry['path'], '')))
+            self.move_tree.insert('', 'end', iid=str(number), image=self.boxes[entry['ticked']], tags=('ticked' if entry['ticked'] else 'unticked',),
+                                  values=(second, remote.clean(entry['path']), rules, states.get(entry['path'], '')))
         ticked = sum(entry['ticked'] for entry in entries)
         self.move_count.set(f'{ticked} of {len(entries)} ticked')
         moved = remote.active_files(events)
@@ -656,8 +711,9 @@ class ListWindow:
         self.back_chosen = (self.back_chosen & set(paths)) | (set(paths) - self.back_seen)
         self.back_seen = set(paths)
         for number, event in enumerate(moved):
-            self.back_tree.insert('', 'end', iid=str(number), values=(TICKED if event['path'] in self.back_chosen else UNTICKED, remote.clean(event['path']),
-                                  remote.clean(event.get('utc', ''), 19).replace('T', ' ')))
+            chosen = event['path'] in self.back_chosen
+            self.back_tree.insert('', 'end', iid=str(number), image=self.boxes[chosen], tags=('ticked' if chosen else 'unticked',),
+                                  values=(remote.clean(event['path']), remote.clean(event.get('utc', ''), 19).replace('T', ' ')))
         self.back_count.set(f'{len(self.back_chosen)} of {len(paths)} ticked')
         if running:
             return

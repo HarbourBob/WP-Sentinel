@@ -103,9 +103,14 @@ the report:
    python sentinel-remote.py review --run sentinel-evidence/SITE/RUN --finding 3 --sha256 HASH --note "SiteGround Security folder protection"
 
 Add --decision withdraw to cancel a review. Records are kept in SITE/review-notes, in the
-same format as a hosted install's. A review covers one finding at one exact file hash:
-the report counts it apart, quarantine-plan and replace-plan leave it out, and it lapses
-as soon as the file changes. Database findings cannot be reviewed.
+same format as a hosted install's. A review covers one finding at one exact content hash,
+of a file or a database entry: the report counts it apart, quarantine-plan and
+replace-plan leave it out, and it lapses as soon as the content changes.
+
+Database findings in the report say where they are in plain words, and for stored
+scripts, where each loads from: this site, a well-known service, or an address Sentinel
+does not recognise. Inline code using eval, atob, fromCharCode or document.write is
+called out. Only the script's domain or service name is recorded, never its content.
 
 QUARANTINE FROM YOUR OWN COMPUTER
 

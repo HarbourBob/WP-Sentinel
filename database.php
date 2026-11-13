@@ -8,6 +8,36 @@ function site_host($url) {
     $host = strtolower((string)parse_url(trim((string)$url), PHP_URL_HOST));
     return strpos($host, 'www.') === 0 ? substr($host, 4) : $host;
 }
+// What the scripts in a value are, as short labels: where each loads from, or which known
+// service inline code belongs to. No other content is returned, so reports stay private.
+function script_summary($text, $selfHosts) {
+    // Page builders such as Elementor keep HTML inside JSON, with escaped quotes and slashes.
+    $html = str_ireplace(['\\/', '\\"', '\\u003c', '\\u003e', '\\u0022'], ['/', '"', '<', '>', '"'], $text);
+    if (!preg_match_all('/<script\b([^>]*)>(.*?)(?:<\/script>|$)/is', $html, $tags, PREG_SET_ORDER)) { return []; }
+    $known = ['gtag(' => 'gtag', 'googletagmanager.com/gtm' => 'gtm', 'datalayer' => 'datalayer', 'fbq(' => 'meta-pixel', 'hotjar' => 'hotjar',
+              'clarity.ms' => 'clarity', '_paq' => 'matomo', 'plausible' => 'plausible', 'adsbygoogle' => 'adsense', 'grecaptcha' => 'recaptcha',
+              'twttr' => 'twitter', 'elementorfrontendconfig' => 'elementor', 'wp.i18n' => 'wordpress', 'jquery(' => 'jquery'];
+    $labels = [];
+    foreach (array_slice($tags, 0, 50) as $tag) {
+        if (preg_match('/\bsrc\s*=\s*["\']?([^"\'\s>]+)/i', $tag[1], $src)) {
+            $url = strpos($src[1], '//') === 0 ? 'https:' . $src[1] : $src[1];
+            $host = site_host($url);
+            $labels[] = $host === '' ? 'src:(this site)' : (in_array($host, $selfHosts, true) ? 'self' : 'src:' . substr($host, 0, 100));
+        } elseif (stripos($tag[1], 'ld+json') !== false) {
+            $labels[] = 'json-ld';
+        } else {
+            $code = strtolower(substr($tag[2], 0, 20000));
+            $label = 'inline';
+            foreach ($known as $marker => $name) {
+                if (strpos($code, $marker) !== false) { $label = 'inline:' . $name; break; }
+            }
+            $labels[] = $label;
+            if (preg_match('/\b(?:eval|atob|unescape)\s*\(|fromcharcode|document\.write\s*\(/', $code)) { $labels[] = 'suspicious'; }
+        }
+    }
+    $labels = array_values(array_unique($labels));
+    return array_slice($labels, 0, 12);
+}
 function state_finding($table, $name, $rule, $severity, $reason, $hashed, $context) {
     return ['source' => 'database', 'location' => "$table:option_name=$name", 'severity' => $severity, 'rule' => $rule, 'reason' => $reason, 'line' => null,
             'sha256' => hash('sha256', $hashed), 'content_complete' => true, 'hash_scope' => 'Normalized value described by this finding', 'context' => $context];
@@ -58,9 +88,20 @@ try {
         $limitations[] = (count($prefixes) - 200) . ' multisite subsites were not inspected (limit 200).';
         $prefixes = array_slice($prefixes, 0, 200);
     }
+    // The site's own addresses, so its own scripts are named as such.
+    $selfHosts = [];
+    foreach ($prefixes as $sitePrefix) {
+        try {
+            $own = $db->query("SELECT option_value FROM `{$sitePrefix}options` WHERE option_name IN ('siteurl', 'home')");
+            while ($row = $own->fetch_row()) { $selfHosts[] = site_host($row[0]); }
+            $own->free();
+        } catch (Throwable $error) {
+        }
+    }
+    $selfHosts = array_values(array_filter(array_unique($selfHosts)));
     $definitions = [];
     foreach ($prefixes as $sitePrefix) {
-        $definitions[$sitePrefix . 'posts'] = ['ID', 'post_content', ['post_type', 'post_status']];
+        $definitions[$sitePrefix . 'posts'] = ['ID', 'post_content', ['post_type', 'post_status', 'post_title']];
         $definitions[$sitePrefix . 'options'] = ['option_id', 'option_value', ['option_name']];
         $definitions[$sitePrefix . 'postmeta'] = ['meta_id', 'meta_value', ['meta_key', 'post_id']];
         $definitions[$sitePrefix . 'comments'] = ['comment_ID', 'comment_content', ['comment_approved', 'comment_post_ID']];
@@ -109,6 +150,17 @@ try {
                             } catch (Throwable $error) {
                                 $context['user_login'] = '(could not read users table)';
                             }
+                        }
+                        if (isset($row['ctx_post_id']) && substr($table, -8) === 'postmeta') {
+                            // Which page the custom field or page-builder data belongs to.
+                            try {
+                                $post = $db->query('SELECT post_title, post_type FROM `' . substr($table, 0, -8) . 'posts` WHERE ID = ' . (int)$row['ctx_post_id'])->fetch_assoc();
+                                if ($post) { $context['post_title'] = substr((string)$post['post_title'], 0, 120); $context['post_type'] = substr((string)$post['post_type'], 0, 40); }
+                            } catch (Throwable $error) {
+                            }
+                        }
+                        if (stripos($text, '<script') !== false) {
+                            $context['scripts'] = script_summary($text, $selfHosts);
                         }
                         for ($fi = $firstFinding; $fi < count($findings); $fi++) {
                             $findings[$fi]['sha256'] = hash('sha256', $text);

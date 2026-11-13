@@ -751,7 +751,7 @@ def record_review(args):
     finding = report['findings'][args.finding - 1]
     manage = load_module('manage')
     if not isinstance(finding, dict) or not manage.reviewable(finding):
-        raise ValueError('This finding has no complete file hash, so it cannot be reviewed. Database findings cannot be, nor files too large to read in full.')
+        raise ValueError('This finding has no fingerprint of its complete content, so it cannot be reviewed. This happens with files or database entries too large to read in full.')
     if args.sha256.lower() != str(finding['sha256']).lower():
         raise ValueError('--sha256 does not match that finding. Nothing was recorded.')
     note = args.note.strip()

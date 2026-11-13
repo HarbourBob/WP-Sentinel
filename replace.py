@@ -192,7 +192,8 @@ def make_plan(report_path, root, reviews_dir, output, references=(), core_versio
             files.setdefault(str(finding.get('location', '')), []).append(finding)
         elif isinstance(finding, dict) and finding.get('severity') in ('high', 'medium', 'review'):
             # Listed, not just counted, so it is clear these still need dealing with another way.
-            skip('database finding: clean copies replace files only', str(finding.get('severity')) + ' ' + str(finding.get('rule', '')) + ' in ' + str(finding.get('location', '')))
+            what = str(finding.get('severity')) + ' ' + str(finding.get('rule', '')) + ' in ' + str(finding.get('location', ''))
+            skip('you reviewed it as benign' if m.review_status(finding, reviews).startswith('Reviewed benign') else 'database finding: clean copies replace files only', what)
         else:
             skipped['database or other non-file finding'] += 1
     output = m.private_path(output, root)

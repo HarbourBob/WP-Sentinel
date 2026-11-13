@@ -864,6 +864,84 @@ def software_inventory(root):
             software[kind].append({'slug': directory.name, 'version': version})
     return software
 
+# Well-known services that sites commonly add scripts from. A match explains a script; it does not clear it.
+KNOWN_SCRIPT_HOSTS = {
+    'googletagmanager.com': 'Google Tag Manager / Google Analytics', 'google-analytics.com': 'Google Analytics', 'gstatic.com': 'Google',
+    'googleapis.com': 'Google', 'google.com': 'Google', 'recaptcha.net': 'Google reCAPTCHA', 'googlesyndication.com': 'Google AdSense',
+    'youtube.com': 'YouTube', 'ytimg.com': 'YouTube', 'vimeo.com': 'Vimeo', 'facebook.net': 'Meta (Facebook) Pixel', 'facebook.com': 'Facebook',
+    'instagram.com': 'Instagram', 'twitter.com': 'X (Twitter)', 'twimg.com': 'X (Twitter)', 'x.com': 'X (Twitter)', 'linkedin.com': 'LinkedIn',
+    'licdn.com': 'LinkedIn', 'pinterest.com': 'Pinterest', 'pinimg.com': 'Pinterest', 'tiktok.com': 'TikTok', 'hotjar.com': 'Hotjar',
+    'clarity.ms': 'Microsoft Clarity', 'cloudflare.com': 'Cloudflare', 'jsdelivr.net': 'jsDelivr (code library host)',
+    'unpkg.com': 'unpkg (code library host)', 'jquery.com': 'jQuery', 'calendly.com': 'Calendly', 'stripe.com': 'Stripe', 'paypal.com': 'PayPal',
+    'paypalobjects.com': 'PayPal', 'list-manage.com': 'Mailchimp', 'mailchimp.com': 'Mailchimp', 'chimpstatic.com': 'Mailchimp',
+    'hs-scripts.com': 'HubSpot', 'hubspot.com': 'HubSpot', 'tawk.to': 'Tawk.to chat', 'cookiebot.com': 'Cookiebot', 'cookieyes.com': 'CookieYes',
+    'termly.io': 'Termly', 'iubenda.com': 'iubenda', 'trustpilot.com': 'Trustpilot', 'elfsight.com': 'Elfsight widgets', 'statcounter.com': 'StatCounter',
+    'wp.com': 'WordPress.com (Jetpack)', 'gravatar.com': 'Gravatar', 'plausible.io': 'Plausible Analytics', 'matomo.cloud': 'Matomo',
+    'typekit.net': 'Adobe Fonts', 'fontawesome.com': 'Font Awesome', 'tidio.co': 'Tidio chat', 'crisp.chat': 'Crisp chat', 'zdassets.com': 'Zendesk',
+}
+INLINE_SCRIPT_NAMES = {
+    'gtag': 'Google Analytics', 'gtm': 'Google Tag Manager', 'datalayer': 'Google Tag Manager', 'meta-pixel': 'Meta (Facebook) Pixel',
+    'hotjar': 'Hotjar', 'clarity': 'Microsoft Clarity', 'matomo': 'Matomo', 'plausible': 'Plausible Analytics', 'adsense': 'Google AdSense',
+    'recaptcha': 'Google reCAPTCHA', 'twitter': 'X (Twitter)', 'elementor': 'Elementor', 'wordpress': 'WordPress', 'jquery': 'jQuery',
+}
+TABLE_NAMES = {'posts': 'content', 'postmeta': 'custom field', 'options': 'setting', 'comments': 'comment', 'commentmeta': 'comment field',
+               'termmeta': 'category or tag field', 'usermeta': 'user field'}
+
+def describe_database_finding(finding):
+    """Plain words for a database finding: where it is, what its scripts are, and a one-line verdict.
+    Returns {} for anything else."""
+    if finding.get('source') != 'database':
+        return {}
+    context = finding.get('context') if isinstance(finding.get('context'), dict) else {}
+    location = str(finding.get('location', ''))
+    table, _, row = location.partition(':')
+    kind = next((name for suffix, name in TABLE_NAMES.items() if table.endswith('_' + suffix)), '')
+    row = row.split('=', 1)[-1]
+    title = str(context.get('post_title', '')).strip()
+    page = (f"“{title}” ({context.get('post_type') or 'post'} {context.get('post_id', row)})" if title
+            else f"{context.get('post_type') or 'post'} {context.get('post_id', row)}")
+    if kind == 'custom field' and context.get('meta_key') == '_elementor_data':
+        where = 'Elementor content of ' + page
+    elif kind == 'custom field':
+        where = f"custom field “{context.get('meta_key', '')}” on {page}"
+    elif kind == 'content':
+        where = f'the content of {page}' + (f" ({context['post_status']})" if context.get('post_status') else '')
+    elif kind == 'setting':
+        where = f"the setting “{context.get('option_name', row)}”"
+    elif kind == 'comment':
+        where = f"comment {row} on post {context.get('comment_post_ID', '?')}"
+    elif kind == 'user field':
+        where = f"a field of user “{context.get('user_login', context.get('user_id', '?'))}”"
+    else:
+        where = f'{kind} {row}' if kind else location
+    scripts, unknown, suspicious = [], False, False
+    for label in context.get('scripts') or []:
+        label = str(label)
+        if label == 'suspicious':
+            suspicious = True
+        elif label in ('self', 'src:(this site)'):
+            scripts.append('this website itself')
+        elif label == 'json-ld':
+            scripts.append('structured data for search engines (not code)')
+        elif label.startswith('src:'):
+            host = label[4:].lower()
+            name = next((n for d, n in KNOWN_SCRIPT_HOSTS.items() if host == d or host.endswith('.' + d)), None)
+            unknown = unknown or not name
+            scripts.append(f'{name} ({host})' if name else f'{host}, not a service Sentinel recognises')
+        elif label.startswith('inline:') and label[7:] in INLINE_SCRIPT_NAMES:
+            scripts.append(INLINE_SCRIPT_NAMES[label[7:]] + ' (written into the page)')
+        elif label.startswith('inline'):
+            unknown = True
+            scripts.append('code written into the page, not from a service Sentinel recognises')
+    verdict = ''
+    if suspicious:
+        verdict = 'Code here uses tricks often used to hide malware (eval, atob, fromCharCode or document.write). Look at this one closely.'
+    elif scripts and unknown:
+        verdict = 'Some of this is not from a service Sentinel recognises. Check you or your plugins added it.'
+    elif scripts:
+        verdict = 'Every script here is from this website or a well-known service. Usually harmless: check you added them, then mark it as reviewed.'
+    return {'where': where, 'scripts': list(dict.fromkeys(scripts)), 'verdict': verdict, 'warn': suspicious or unknown}
+
 def finding_commands(finding, index, report_path, profile):
     """Ready-to-paste commands for one finding. Previews only: none of these change anything."""
     digest = finding.get('sha256')
@@ -898,6 +976,7 @@ def render_report(report, report_path, profile, show_commands=True):
             'body{font:16px/1.5 system-ui,sans-serif;margin:0 auto;padding:2em 1em;max-width:1400px;color:var(--ink);background:#fff}',
             'h1{margin:0 0 .2em}.cards{display:flex;flex-wrap:wrap;gap:.75em;margin:1.2em 0}.card{flex:1 1 150px;border:1px solid var(--line);border-left:5px solid;border-radius:6px;padding:.7em 1em}',
             '.card b{display:block;font-size:1.8em;line-height:1.2}.card small{color:var(--muted)}.high{border-color:var(--high);color:var(--high)}.medium{border-color:var(--medium);color:var(--medium)}.review{border-color:var(--review);color:var(--review)}.info{border-color:var(--info);color:var(--info)}',
+            '.where{margin:.2em 0;font-weight:600}.scripts{margin:.3em 0 .5em;padding-left:1.3em}.scripts li{margin:.15em 0}',
             '.reviewed{border-color:#2f7d4f;color:#2f7d4f}.finding.reviewed{border-left-color:#2f7d4f;opacity:.85}.note{background:#eef7f1;border-radius:4px;padding:.3em .5em;color:var(--ink)}.changed{background:#fff4e5;border-radius:4px;padding:.3em .5em;color:var(--ink)}',
             '.card small,.card span{color:var(--ink)}.controls{display:flex;flex-wrap:wrap;gap:1em;align-items:center;background:var(--panel);padding:.7em 1em;border-radius:6px;position:sticky;top:0}',
             'input[type=search]{flex:1 1 220px;font:inherit;padding:.3em .5em}.finding{border:1px solid var(--line);border-left:5px solid;border-radius:6px;padding:.8em 1em;margin:.8em 0;color:var(--ink)}.finding.high{border-left-color:var(--high)}.finding.medium{border-left-color:var(--medium)}.finding.review{border-left-color:var(--review)}.finding.info{border-left-color:var(--info)}',
@@ -928,6 +1007,13 @@ def render_report(report, report_path, profile, show_commands=True):
             page.append(f"<p class=\"note\">Reviewed as harmless, {escape(str(finding['review'].get('utc', ''))[:10])}: {escape(finding['review'].get('note', ''))}</p>")
         elif finding.get('review_changed'):
             page.append('<p class="changed">You reviewed this file before, but it has changed since. Look at it again.</p>')
+        plain = describe_database_finding(finding)
+        if plain:
+            page.append(f"<p class=\"where\">In {escape(plain['where'])}</p>")
+            if plain['scripts']:
+                page.append('<ul class="scripts">' + ''.join(f'<li>{escape(item)}</li>' for item in plain['scripts']) + '</ul>')
+            if plain['verdict']:
+                page.append(f"<p class=\"{'changed' if plain['warn'] else 'note'}\">{escape(plain['verdict'])}</p>")
         if finding.get('context'):
             page.append('<div class="meta">Context: <code>' + escape(json.dumps(finding['context'], ensure_ascii=False)) + '</code></div>')
         if finding.get('sha256'):

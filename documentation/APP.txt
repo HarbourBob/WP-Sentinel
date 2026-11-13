@@ -56,11 +56,20 @@ host or a security plugin added. Once you have checked one, press Reviews, under
 scan, click the finding, press Mark as reviewed and say briefly what you checked.
 
 A reviewed finding is counted apart in the report, under a Reviewed box, and left out
-of Quarantine and Clean copies lists. The review covers the file exactly as it is in
-that scan. If the file changes, the finding counts again, marked "changed since your
-review", so look at it again. Withdraw review undoes a review. Database findings and
-files too large to read in full cannot be reviewed, because there is no file hash to
-tie the review to.
+of Quarantine and Clean copies lists. The review covers the file, or the database
+entry, exactly as it is in that scan. If it changes, the finding counts again, marked
+"changed since your review", so look at it again. Withdraw review undoes a review.
+Files and database entries too large to read in full cannot be reviewed, because there
+is no fingerprint of their whole content to tie the review to.
+
+Clicking a finding shows what it is beneath the list. For database findings that means
+where it is in plain words, such as "Elementor content of 'Home' (page 40)", and for
+stored scripts, where each one loads from: this website, a well-known service such as
+Google Analytics or YouTube, or an address Sentinel does not recognise. A short verdict
+follows. Scripts from this site or well-known services are usually harmless; anything
+unrecognised needs checking that you or a plugin added it; and code using tricks often
+used to hide malware, such as eval or atob, needs a close look. The report shows the
+same explanations.
 
 Reviews are kept on this computer, in a review-notes folder beside the site's scans.
 The report page is built on this computer from the scan's sealed report, with your

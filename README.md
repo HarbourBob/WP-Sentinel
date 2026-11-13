@@ -2,16 +2,22 @@
 
 > **Back up your site first, if at all possible.** Keep the backup away from the website.
 
-WP Sentinel scans a WordPress site and its database over SSH, but hosted on your own PC for 
-signs of compromise, and helps you deal with what it finds. It produces a report you can 
-read in a browser, and it can move reviewed files into a private quarantine or swap them 
-for verified clean copies.
-
-WP Sentinel has an intuitive Windows-based interface of lists, tickboxes, settings and buttons.
-Useful for people not familiar with SSH or who don't like the idea of typing long strings
-into the terminal.
+WP Sentinel scans a WordPress site and its database over SSH for signs of compromise, and
+helps you deal with what it finds. It produces a report you can read in a browser, and it
+can move reviewed files into a private quarantine or swap them for verified clean copies.
 
 Current release: **0.25.0-rc1**
+
+## Status: new and largely untested, with no guarantees
+
+This is new software, offered for testing under the [MIT licence](LICENSE), with no
+warranty. It may not work on your host, it may miss malware, and it may flag innocent
+files. It has been run on one real site. How much real malware the rules catch has not
+been measured. Try it on a staging copy before relying on it.
+
+A report with no findings does not mean there is no malware.
+
+Testers and developers are welcome. See [Contributing](#contributing).
 
 ## What it does
 
@@ -97,7 +103,7 @@ python sentinel-remote.py scan --host user@example.com --root /home/user/public_
 
 [REMOTE.txt](documentation/REMOTE.txt) covers SSH ports, keys and database checks.
 
-Prefer not to type commands? Sentinel Visual is available; just double-click `python sentinel-app.py`. This opens a window that runs the same
+Prefer not to type commands? `python sentinel-app.py` opens a window that runs the same
 scan, a Quarantine window that moves the files it found out of the website, and a Clean
 copies window that swaps changed files for verified ones. Both can be undone. See [APP.txt](documentation/APP.txt). It is a prototype.
 

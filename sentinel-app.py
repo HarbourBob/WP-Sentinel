@@ -38,6 +38,8 @@ QUIET = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
 spec = importlib.util.spec_from_file_location('sentinel_app_remote', REMOTE)
 remote = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(remote)
+# The scanner's plain-English descriptions of findings, for the Reviews window.
+sentinel = remote.load_module('sentinel')
 
 def console_python():
     """python.exe rather than pythonw.exe, so a console window can show prompts."""
@@ -892,7 +894,7 @@ class ReviewWindow:
         ttk.Label(frame, text='Latest scan, ' + stamp_text(run_dir.name) + '. Click a finding, then a button.', foreground='#666').pack(anchor='w', pady=(0, 6))
         box = ttk.Frame(frame)
         box.pack(fill='both', expand=True)
-        columns = (('number', '#', 40), ('priority', 'Priority', 70), ('path', 'File', 360), ('rule', 'Found by', 170), ('status', 'Review', 240))
+        columns = (('number', '#', 40), ('priority', 'Priority', 70), ('path', 'Where', 360), ('rule', 'Found by', 170), ('status', 'Review', 240))
         self.tree = ttk.Treeview(box, columns=[c[0] for c in columns], show='headings', height=12, selectmode='browse')
         for name, heading, width in columns:
             self.tree.heading(name, text=heading, anchor='w')
@@ -915,6 +917,11 @@ class ReviewWindow:
         ttk.Checkbutton(row, text='Show info findings', variable=self.show_info, command=self.refresh).pack(side='left', padx=(12, 0))
         self.status = tk.StringVar()
         ttk.Label(frame, textvariable=self.status, font=('Segoe UI', 10, 'bold'), wraplength=820, justify='left').pack(anchor='w', pady=(8, 0))
+        # What the chosen finding is, in plain words, to help decide before marking it.
+        self.detail = tk.Text(frame, height=7, wrap='word', font=('Segoe UI', 10), state='disabled', relief='flat', background=top.cget('background'))
+        self.detail.pack(fill='x', pady=(6, 0))
+        self.detail.tag_configure('head', font=('Segoe UI', 10, 'bold'))
+        self.detail.tag_configure('warn', foreground='#9a5b00')
         top.protocol('WM_DELETE_WINDOW', self.close)
         self.refresh()
 
@@ -944,10 +951,11 @@ class ReviewWindow:
             elif finding.get('review_changed'):
                 state = 'Changed since your review: look again'
             elif not manage.reviewable(finding):
-                state = 'Cannot be reviewed (no file hash)'
+                state = 'Cannot be reviewed (no content fingerprint)'
             else:
                 state = 'Not reviewed'
-            self.tree.insert('', 'end', iid=str(number), values=(number, remote.clean(finding.get('severity', ''), 20), remote.clean(finding.get('location', '')),
+            where = sentinel.describe_database_finding(finding).get('where') or finding.get('location', '')
+            self.tree.insert('', 'end', iid=str(number), values=(number, remote.clean(finding.get('severity', ''), 20), remote.clean(where),
                                                                   remote.clean(finding.get('rule', ''), 80), state))
         self.refresh_buttons()
 
@@ -965,6 +973,21 @@ class ReviewWindow:
         can_mark = bool(finding) and manage.reviewable(finding) and not finding.get('review')
         self.mark_button.configure(state='normal' if can_mark else 'disabled')
         self.withdraw_button.configure(state='normal' if finding and finding.get('review') else 'disabled')
+        self.show_detail(finding)
+
+    def show_detail(self, finding):
+        """The chosen finding explained: why it was flagged, where it is and, for scripts, what they are."""
+        self.detail.configure(state='normal')
+        self.detail.delete('1.0', 'end')
+        if finding:
+            plain = sentinel.describe_database_finding(finding)
+            self.detail.insert('end', remote.clean(plain.get('where') or finding.get('location', '')) + '\n', 'head')
+            self.detail.insert('end', remote.clean(finding.get('reason', ''), 400) + '\n')
+            for item in plain.get('scripts', []):
+                self.detail.insert('end', '  •  ' + remote.clean(item, 200) + '\n')
+            if plain.get('verdict'):
+                self.detail.insert('end', plain['verdict'] + '\n', 'warn' if plain.get('warn') else '')
+        self.detail.configure(state='disabled')
 
     def record(self, number, finding, decision, note):
         args = argparse.Namespace(run=self.run_dir, finding=number, sha256=finding['sha256'], note=note, decision=decision)

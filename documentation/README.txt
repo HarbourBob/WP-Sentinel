@@ -59,6 +59,10 @@ WHAT IS NEW IN 0.25
   non-US site was reported as changed when it was not.
 - Quarantine and clean copies lists now also name the database findings they leave
   out, since they change files only.
+- Database findings explained: the report and the app's Reviews window say where each
+  is in plain words, and where each stored script loads from, naming well-known
+  services and flagging unrecognised addresses and tell-tale malware tricks. Database
+  findings can be marked as reviewed, like files.
 - Hosts that name the home folder through a symlink, as SiteGround does, now work.
 - A copy back from the host that is cut off part way is tried once more, and a second
   failure gives a plain message instead of a crash.

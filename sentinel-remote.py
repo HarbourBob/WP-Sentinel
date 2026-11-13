@@ -47,7 +47,7 @@ AGENT_SEND_FILES = "import os,sys,tarfile;d=sys.argv[1];t=tarfile.open(fileobj=s
 # Unpacks your review records, sent as one file, into a folder the list programs can read.
 AGENT_REVIEWS = "import json,os,sys;d=sys.argv[1];r=os.path.join(d,'reviews');os.mkdir(r,0o700);[open(os.path.join(r,'%d.json'%i),'w').write(json.dumps(x)) for i,x in enumerate(json.load(open(os.path.join(d,'reviews.json'))))]"
 AGENT_PRIVATE ="import os,sys;os.umask(0o077);p=os.path.abspath(os.path.expanduser(sys.argv[1]));os.makedirs(p,0o700,exist_ok=True);assert not os.path.islink(p);os.chmod(p,0o700);print(os.path.realpath(p))"
-AGENT_PUT_PLAN = "import os,re,sys;d=sys.argv[1];assert re.fullmatch(r'(batch|replace)-\\d{8}T\\d{6}Z-[0-9a-f]{6}',os.path.basename(d)) and os.path.isdir(d) and not os.path.islink(d);t=os.path.join(d,'plan.txt.tmp');f=open(t,'wb');f.write(sys.stdin.buffer.read());f.close();os.replace(t,os.path.join(d,'plan.txt'))"
+AGENT_PUT_PLAN = "import os,re,sys;d=sys.argv[1];assert re.fullmatch(r'(batch|replace|dbfix)-\\d{8}T\\d{6}Z-[0-9a-f]{6}',os.path.basename(d)) and os.path.isdir(d) and not os.path.islink(d);t=os.path.join(d,'plan.txt.tmp');f=open(t,'wb');f.write(sys.stdin.buffer.read());f.close();os.replace(t,os.path.join(d,'plan.txt'))"
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc)
@@ -373,17 +373,21 @@ def make_checklist(args):
 # step uploads the programs for that step only, and brings the list and its receipt back here.
 
 HEX = re.compile('[a-fA-F0-9]{64}')
-LIST_NAME = re.compile(r'(batch|replace)-\d{8}T\d{6}Z-[0-9a-f]{6}')
+LIST_NAME = re.compile(r'(batch|replace|dbfix)-\d{8}T\d{6}Z-[0-9a-f]{6}')
 MAX_ONLY = 200
 # Each kind of list: its folder name here, its program on the host, and the words used for it.
 KINDS = {
-    'quarantine': dict(prefix='batch', folder='quarantine', program='batch.py', files=('batch.py', 'quarantine.py', 'manage.py'),
+    'quarantine': dict(prefix='batch', folder='quarantine', program='batch.py', files=('batch.py', 'quarantine.py', 'manage.py'), store='quarantine-store',
                        format='# sentinel-quarantine-plan-1', make='quarantine-plan', apply='quarantine', undo='restore'),
     'replace': dict(prefix='replace', folder='clean-copies', program='replace.py', files=('replace.py', 'sentinel.py', 'batch.py', 'quarantine.py', 'manage.py'),
-                    format='# sentinel-replace-plan-1', make='replace-plan', apply='replace', undo='replace-undo'),
+                    store='quarantine-store', format='# sentinel-replace-plan-1', make='replace-plan', apply='replace', undo='replace-undo'),
+    # Database fixes keep their saved originals apart from quarantined files.
+    'dbfix': dict(prefix='dbfix', folder='database-fixes', program='dbfix.py', files=('dbfix.py', 'db-fix.php', 'sentinel.py', 'batch.py', 'quarantine.py', 'manage.py'),
+                  store='db-fix-store', format='# sentinel-dbfix-plan-1', make='db-plan', apply='db-fix', undo='db-undo'),
 }
 # Each command: the kind of list, and the action name batch.py or replace.py uses for it.
-STEPS = {'quarantine': ('quarantine', 'quarantine'), 'restore': ('quarantine', 'restore'), 'replace': ('replace', 'apply'), 'replace-undo': ('replace', 'undo')}
+STEPS = {'quarantine': ('quarantine', 'quarantine'), 'restore': ('quarantine', 'restore'), 'replace': ('replace', 'apply'), 'replace-undo': ('replace', 'undo'),
+         'db-fix': ('dbfix', 'apply'), 'db-undo': ('dbfix', 'undo')}
 
 def clean(value, limit=300):
     return CONTROL_TEXT.sub('?', str(value))[:limit]
@@ -436,10 +440,10 @@ def receipt_events(text):
     return events
 
 def active_files(events):
-    """Files a list has moved or replaced and not yet undone, as batch.py and replace.py see them."""
+    """What a list has moved, replaced or fixed and not yet undone, as the programs on the host see it."""
     current = {}
     for event in events:
-        if event['event'] in ('quarantined', 'replaced'):
+        if event['event'] in ('quarantined', 'replaced', 'fixed'):
             current[event['path']] = event
         elif event['event'] in ('restored', 'undone'):
             current.pop(event['path'], None)
@@ -447,7 +451,7 @@ def active_files(events):
 
 def file_states(events):
     """The latest thing that happened to each file in a list."""
-    names = {'quarantined': 'moved', 'restored': 'put back', 'replaced': 'swapped', 'undone': 'changed back', 'failed': 'failed'}
+    names = {'quarantined': 'moved', 'restored': 'put back', 'replaced': 'swapped', 'fixed': 'removed', 'undone': 'changed back', 'failed': 'failed'}
     return {event['path']: names.get(event['event'], clean(event['event'], 20)) for event in events}
 
 def batch_files(folder):
@@ -580,6 +584,9 @@ def make_list(args, kind):
                 if kind == 'quarantine':
                     print('Making the list on the host. Nothing on the website changes.', flush=True)
                     tail += ['--priority', args.priority] + (['--include-critical'] if args.include_critical else [])
+                elif kind == 'dbfix':
+                    print('Reading the flagged database entries on the host. Nothing on the website changes.', flush=True)
+                    tail += ['--php', args.php]
                 else:
                     print('Downloading and checking clean copies on the host. Nothing on the website changes.', flush=True)
                     tail += ['--locale', args.locale] + (['--core-version', args.core_version] if args.core_version else [])
@@ -593,13 +600,16 @@ def make_list(args, kind):
             raise RuntimeError('The host sent back something that is not a list of this kind.')
         meta = {'format': 'sentinel-remote-batch-1', 'kind': kind, 'host': args.host, 'root': args.root, 'remote_folder': remote_folder, 'run': run_dir.name,
                 'created_utc': now().isoformat()}
-        meta.update({'priority': args.priority, 'include_critical': args.include_critical} if kind == 'quarantine' else {'locale': args.locale})
+        meta.update({'priority': args.priority, 'include_critical': args.include_critical} if kind == 'quarantine' else {'locale': args.locale} if kind == 'replace' else {})
         (folder / 'batch.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     text = (folder / 'plan.txt').read_text(encoding='utf-8', errors='replace')
     entries = plan_entries(text)
     if kind == 'quarantine':
         counts = {level: sum(entry['priority'] == level for entry in entries) for level in ('high', 'medium', 'review')}
         print(f'Made a list of {len(entries)} files to move out of the website: ' + ', '.join(f'{count} {level}' for level, count in counts.items() if count) + '.' if entries else 'No files qualify for the list.')
+    elif kind == 'dbfix':
+        where = len({entry['path'].rsplit('#', 1)[0] for entry in entries})
+        print(f'Made a list of {len(entries)} pieces of code to remove, in {where} database entries.' if entries else 'No database findings can be fixed this way.')
     else:
         missing = sum(entry['sha256'] == 'missing' for entry in entries)
         print(f'Made a list of {len(entries)} files to swap for clean copies' + (f', {missing} of them missing and to be put back' if missing else '') + '.' if entries else 'No files need a clean copy.')
@@ -609,7 +619,7 @@ def make_list(args, kind):
     print('Nothing on the website has changed.')
     print('List: ' + str(folder))
     if entries:
-        print('Read plan.txt there. To spare a file, start its line with #. Then check the list:')
+        print('Read plan.txt there. To spare a line, start it with #. Then check the list:')
         print('  ' + next_command(args, spec['apply'], folder))
     return 0
 
@@ -618,7 +628,7 @@ def batch_step(args, command):
     kind, action = STEPS[command]
     spec = KINDS[kind]
     folder, remote_folder = load_batch(args, kind)
-    store = remote_folder.rsplit('/', 1)[0] + '/quarantine-store'
+    store = remote_folder.rsplit('/', 1)[0] + '/' + spec['store']
     only = getattr(args, 'only', [])
     if len(only) > MAX_ONLY:
         raise ValueError(f'Use --only for at most {MAX_ONLY} files at a time, or leave it out for every file.')
@@ -635,12 +645,15 @@ def batch_step(args, command):
             except RuntimeError:
                 raise RuntimeError('This list\'s folder was not found on the host (' + remote_folder + '). Make a new list.') from None
             tail = ['--root', args.root, '--store', store, '--plan', remote_folder + '/plan.txt'] + (['--apply', '--plan-sha256', plan_sha] if args.apply else [])
-            if command in ('quarantine', 'replace'):
+            if command in ('quarantine', 'replace', 'db-fix'):
                 tail += (['--limit', str(args.limit)] if args.limit else []) + (['--skip-problems'] if args.skip_problems else [])
+            if kind == 'dbfix':
+                tail += ['--php', args.php]
             for path in only:
                 tail += ['--only', path]
             doing = {'quarantine': 'Moving files out of the website...', 'restore': 'Putting files back...', 'replace': 'Swapping in clean copies...',
-                     'replace-undo': 'Changing files back to the originals...'}
+                     'replace-undo': 'Changing files back to the originals...', 'db-fix': 'Removing the chosen code from the database...',
+                     'db-undo': 'Putting the original database values back...'}
             print(doing[command] if args.apply else 'Checking the list on the host. Nothing on the website changes.', flush=True)
             try:
                 code, answer = run_batch(host, run_path, spec['program'], action, tail)
@@ -665,11 +678,13 @@ def show_step(args, command, folder, answer):
     for item in answer.get('problems', []) + answer.get('failed', []):
         print(f'  {item["file"]}: {item["problem"]}')
     status = answer.get('status', '')
-    forward = command in ('quarantine', 'replace')
-    undo = {'quarantine': 'restore', 'replace': 'replace-undo'}.get(command, command)
+    forward = command in ('quarantine', 'replace', 'db-fix')
+    undo = {'quarantine': 'restore', 'replace': 'replace-undo', 'db-fix': 'db-undo'}.get(command, command)
+    database = command in ('db-fix', 'db-undo')
     if forward and not args.apply:
         done = get('already_in_store') if command == 'quarantine' else get('already_done')
-        print(f'Checked: {get("ready")} files ready to ' + ('move' if command == 'quarantine' else 'swap for clean copies') + f', {done} already done, {get("problem_count")} with problems.')
+        ready = {'quarantine': 'files ready to move', 'replace': 'files ready to swap for clean copies', 'db-fix': 'database entries ready to fix'}[command]
+        print(f'Checked: {get("ready")} {ready}, {done} already done, {get("problem_count")} with problems.')
         if get('problem_count'):
             print('Files with problems stop the whole list. Usually they have changed since the scan, which needs a look. Spare them (start their line with #), or add --skip-problems to leave them where they are.')
         print('Nothing on the website has changed.')
@@ -679,20 +694,25 @@ def show_step(args, command, folder, answer):
         if status == 'stopped-before-changes':
             print(f'Nothing was changed: {get("problem_count")} files differ from the list. Check the list again.')
         else:
-            print((f'Moved {get("moved")} files out of the website.' if command == 'quarantine' else f'Swapped {get("replaced")} files for clean copies.')
-                  + f' {get("failed_count")} failed.' + (f' {get("still_to_do")} still to do: check the list again and do the next ones.' if get('still_to_do') else ''))
+            did = {'quarantine': f'Moved {get("moved")} files out of the website.', 'replace': f'Swapped {get("replaced")} files for clean copies.',
+                   'db-fix': f'Removed the chosen code from {get("fixed")} database entries.'}[command]
+            print(did + f' {get("failed_count")} failed.' + (f' {get("still_to_do")} still to do: check the list again and do the next ones.' if get('still_to_do') else ''))
             if status == 'stopped-after-repeated-failures':
                 print('Stopped after 5 failures in a row, which usually means a problem such as a full disk.')
+            if database:
+                print('Clear every cache now: the page cache, the object cache (Memcached) and any page-builder cache. Until then the old content can still be served.')
             print('Check the site now, then scan again. This does not clear caches, end logins or close the way in.')
             print('To undo: ' + next_command(args, undo, folder))
     elif not args.apply:
-        print(f'Checked: {get("ready")} files ready to ' + ('put back' if command == 'restore' else 'change back to the originals') + f', {get("problem_count")} with problems. Nothing on the website has changed.')
+        back = {'restore': 'files ready to put back', 'replace-undo': 'files ready to change back to the originals', 'db-undo': 'database entries ready to put back as they were'}[command]
+        print(f'Checked: {get("ready")} {back}, {get("problem_count")} with problems. Nothing on the website has changed.')
         if get('ready'):
-            print('This makes the original files active again, including any malware among them.')
+            print('This makes the originals active again, including any malware among them.')
             print('To go ahead: ' + next_command(args, command, folder, *[item for path in getattr(args, 'only', []) for item in ('--only', path)], '--apply', '--plan-sha256', answer['plan_sha256']))
     else:
-        print((f'Put back {get("restored")} files.' if command == 'restore' else f'Changed {get("undone")} files back to the originals.')
-              + f' {get("failed_count")} failed. Their copies stay in the private folder on the host.')
+        did = {'restore': f'Put back {get("restored")} files.', 'replace-undo': f'Changed {get("undone")} files back to the originals.',
+               'db-undo': f'Put {get("undone")} database entries back as they were. Clear every cache.'}[command]
+        print(did + f' {get("failed_count")} failed. Their copies stay in the private folder on the host.')
 
 # Reviews. Kept on this computer beside the site's runs, in the hosted install's record format. A review covers
 # one finding at one exact file hash, so it lapses as soon as the file changes.
@@ -1256,7 +1276,8 @@ def parser():
         c.add_argument('--root', required=True, help='Absolute path of the WordPress site on the host')
         c.add_argument('--remote-temp', default='~', help='Host folder for the temporary run folder. Must be outside every website.')
     for name, text in (('quarantine-plan', 'Make a list of files to move out of the website, from a saved scan. Changes nothing'),
-                       ('replace-plan', 'Make a list of core, plugin and theme files to swap for verified clean copies, from a saved scan. Changes nothing')):
+                       ('replace-plan', 'Make a list of core, plugin and theme files to swap for verified clean copies, from a saved scan. Changes nothing'),
+                       ('db-plan', 'Make a list of flagged code to remove from database entries, from a saved scan. Changes nothing')):
         c = sub.add_parser(name, allow_abbrev=False, help=text)
         quarantining(c)
         c.add_argument('--run', type=Path, required=True, help='A run folder inside the evidence folder')
@@ -1264,17 +1285,23 @@ def parser():
         if name == 'quarantine-plan':
             c.add_argument('--priority', choices=('high', 'medium', 'review'), default='high', help='Include findings at this priority or higher')
             c.add_argument('--include-critical', action='store_true', help='Allow files WordPress needs in order to run')
+        elif name == 'db-plan':
+            c.add_argument('--php', default='php', help='PHP command on the host')
         else:
             c.add_argument('--locale', default='auto', help='Language edition of the WordPress core copy, such as en_GB. Default: read from the site')
             c.add_argument('--core-version', help='WordPress version of the core copy. Default: read from the site')
     for name, text in (('quarantine', 'Check a list, or with --apply move its files out of the website'), ('restore', 'Check, or with --apply put back, files a list moved'),
-                       ('replace', 'Check a list, or with --apply swap its files for clean copies'), ('replace-undo', 'Check, or with --apply change back, files a list swapped')):
+                       ('replace', 'Check a list, or with --apply swap its files for clean copies'), ('replace-undo', 'Check, or with --apply change back, files a list swapped'),
+                       ('db-fix', 'Check a list, or with --apply remove its flagged code from the database'),
+                       ('db-undo', 'Check, or with --apply put back, database entries a list changed')):
         c = sub.add_parser(name, allow_abbrev=False, help=text)
         quarantining(c)
-        c.add_argument('--plan', type=Path, required=True, help='The list folder made by quarantine-plan or replace-plan')
+        c.add_argument('--plan', type=Path, required=True, help='The list folder made by quarantine-plan, replace-plan or db-plan')
+        if name.startswith('db-'):
+            c.add_argument('--php', default='php', help='PHP command on the host')
         c.add_argument('--apply', action='store_true')
         c.add_argument('--plan-sha256', help='From checking this exact list')
-        if name in ('quarantine', 'replace'):
+        if name in ('quarantine', 'replace', 'db-fix'):
             c.add_argument('--limit', type=int, help='Change at most this many files now; check again and repeat for the rest')
             c.add_argument('--skip-problems', action='store_true', help='Leave files that differ from the list where they are, and do the rest')
         else:
@@ -1309,13 +1336,13 @@ ADMIN_WARNING = ('WARNING: this window is running as administrator. Evidence fol
 def main(argv=None):
     args = parser().parse_args(argv)
     os.umask(0o077)
-    if args.action in ('scan', 'scan-all', 'checklist', 'quarantine-plan', 'replace-plan') and elevated():
+    if args.action in ('scan', 'scan-all', 'checklist', 'quarantine-plan', 'replace-plan', 'db-plan') and elevated():
         print(ADMIN_WARNING, file=sys.stderr, flush=True)
     if getattr(args, 'start', False) is None:
         args.start = ['~']
     try:
         return {'scan': scan, 'discover': discover, 'scan-all': scan_all, 'verify': verify, 'prune': prune, 'checklist': make_checklist, 'alert-test': alert_test,
-                'review': record_review, 'report': open_report, 'quarantine-plan': lambda a: make_list(a, 'quarantine'), 'replace-plan': lambda a: make_list(a, 'replace'),
+                'review': record_review, 'report': open_report, 'quarantine-plan': lambda a: make_list(a, 'quarantine'), 'replace-plan': lambda a: make_list(a, 'replace'), 'db-plan': lambda a: make_list(a, 'dbfix'),
                 **{name: lambda a, name=name: batch_step(a, name) for name in STEPS}}[args.action](args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print('Stopped: ' + str(error), file=sys.stderr)

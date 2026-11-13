@@ -168,8 +168,36 @@ The WordPress version and language edition are read from the site; --core-versio
 each one the release you expect? Lists are kept in a clean-copies folder beside the
 site's runs. Premium plugins and themes have no public copy and are left out.
 
+DATABASE FIXES FROM YOUR OWN COMPUTER
+
+The same steps remove flagged code from database entries: script elements, hidden
+iframes and PHP blocks, in posts, post meta (including page-builder data), options,
+comments, comment meta and term meta. Only the pieces left in the list are removed;
+the rest of each value is untouched. Scan with --db-from-wp-config first. Database
+details are read from wp-config.php on the host and never leave it. Back up the
+database before applying.
+
+   python sentinel-remote.py db-plan --host user@example.com --root /home/user/public_html --run sentinel-evidence/SITE/RUN
+   python sentinel-remote.py db-fix ... --plan LIST-FOLDER
+   python sentinel-remote.py db-fix ... --plan LIST-FOLDER --apply --plan-sha256 HASH
+   python sentinel-remote.py db-undo ... --plan LIST-FOLDER
+
+Each line of plan.txt is one piece of code; fragments.json beside it says where each
+is and how it starts. Start a line with # to keep that piece. Findings you reviewed as
+harmless are left out. Lists are kept in a database-fixes folder beside the site's runs,
+and the saved originals in wp-sentinel-private/db-fix-store on the host.
+
+For each entry the original value is saved and verified first, the change is made in
+one transaction, and the row is read back to confirm only that value changed. Undo
+restores an entry only if it still holds exactly what the fix wrote. Refused: usermeta;
+values over 4 MiB; PHP-serialized values holding objects or that do not re-serialize
+exactly; code that cannot be removed without breaking surrounding JSON; tables that are
+not InnoDB or have triggers. --only LOCATION, repeatable, undoes chosen entries, and
+--php names the host's PHP command. Afterwards clear page, object and page-builder
+caches: direct database changes bypass WordPress, so caches still hold the old content.
+
 A hosted install (INSTALL.txt) is still needed for single-file quarantine by ID, your
-own ZIPs as clean copies, and database changes. The commands shown in a remote report apply to that
+own ZIPs as clean copies, and replacing a post's whole content (DATABASE-CONTENT.txt). The commands shown in a remote report apply to that
 hosted install, with your profile, such as ../site.json, in place of PROFILE, and report
 paths must be on the host for the review command.
 
@@ -203,8 +231,10 @@ icacls sentinel-evidence /grant "${env:USERNAME}:(OI)(CI)F" /T
 TESTING STATUS
 
 Run successfully against a real host over real SSH by the project owner in October
-2026. Quarantine and restore of a harmless test file, and a clean copy of a core file
-and its undo, were run the same way in November 2026. Quoting, cleanup, tampering, unsafe evidence and cut-off copies are tested on
+2026. Quarantine and restore of a harmless test file, a clean copy of a core file and
+its undo, and a database fix of a throwaway draft post and its undo, were run the same
+way in November 2026. The database fix has been run on live MySQL for post content
+only; page-builder data and serialized options are tested against a stand-in database. Quoting, cleanup, tampering, unsafe evidence and cut-off copies are tested on
 Windows with a stand-in for ssh. For a run with --database, check its result on your own host.
 
 For scheduled runs, alerts and removing old runs, see MONITORING.txt. To scan every

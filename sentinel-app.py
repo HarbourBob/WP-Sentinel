@@ -54,7 +54,7 @@ class App:
         self.root = root
         self.process = None
         self.lines = queue.Queue()
-        # Where the running command's output goes: this window, or a quarantine or clean copies window.
+        # Where the running command's output goes: this window, or one of the clean-up windows.
         self.view = self
         self.windows = {}
         root.title('WP Sentinel')
@@ -110,12 +110,20 @@ class App:
             b = ttk.Button(pages, text=text, command=lambda n=name: self.open_page(n))
             b.pack(side='left', padx=(0, 6))
             self.busy_buttons.append(b)
-        for text, command in (('Reviews', lambda: self.open_window('reviews')), ('Checklist', self.checklist), ('Quarantine', lambda: self.open_window('quarantine')),
-                              ('Clean copies', lambda: self.open_window('replace'))):
+        for text, command in (('Reviews', lambda: self.open_window('reviews')), ('Checklist', self.checklist)):
             b = ttk.Button(pages, text=text, command=command)
             b.pack(side='left', padx=(0, 6))
             self.busy_buttons.append(b)
         ttk.Button(pages, text='Evidence folder', command=self.open_evidence).pack(side='left')
+
+        # The tools that change the website, each with its own window, checks and undo.
+        fixes = ttk.Frame(frame)
+        fixes.grid(row=row, column=0, columnspan=3, sticky='w', pady=(0, 6)); row += 1
+        ttk.Label(fixes, text='Clean up:').pack(side='left', padx=(0, 6))
+        for text, kind in (('Quarantine', 'quarantine'), ('Clean copies', 'replace'), ('Database fixes', 'dbfix')):
+            b = ttk.Button(fixes, text=text, command=lambda k=kind: self.open_window(k))
+            b.pack(side='left', padx=(0, 6))
+            self.busy_buttons.append(b)
 
         self.status = tk.StringVar(value='Fill in the connection, then press Test connection.')
         ttk.Label(frame, textvariable=self.status, font=('Segoe UI', 10, 'bold')).grid(row=row, column=0, columnspan=3, sticky='w'); row += 1
@@ -410,7 +418,7 @@ class App:
         self.run([sys.executable, '-u', str(REMOTE), 'checklist', '--run', str(run_dir)], 'Making the checklist', done)
 
     def open_window(self, kind):
-        """The reviews, quarantine or clean copies window for the latest scan."""
+        """The reviews, quarantine, clean copies or database fixes window for the latest scan."""
         if kind in self.windows:
             self.windows[kind].top.lift()
             return
@@ -482,6 +490,24 @@ WORDS = {
         undo_ready='{} files are ready to change back. Press Change back the ticked files.',
         undo_confirm='Change {} files back to the originals?\n\nThe originals become active on your website again, including any malware in them.',
         undone='Files changed back. Check your site.', counted='swapped now', stop='Stop now? Files already swapped stay swapped. Check the list again afterwards: it carries on safely from where it stopped.'),
+    'dbfix': dict(
+        title='WP Sentinel: database fixes', name='database fixes',
+        intro='Database fixes remove pieces of flagged code, such as a script, a hidden frame or a block of PHP, from entries in your website\'s database. '
+              'Only the pieces you tick are removed; everything else in the entry stays exactly as it is. Each original is kept in a private folder on your '
+              'hosting account, so you can put it back. Back up your database first, and only remove code you are sure is not yours.',
+        do_tab='Remove code', do_tick='Remove', do_button='Remove the ticked code', doing='Removing the chosen code from the database', ready='{} database entries are ready to fix. Press Remove the ticked code.',
+        confirm='Remove the ticked code from {} database entries?\n\nHave you backed up the database? Removing code your site relies on, such as your own '
+                'analytics or a widget, will stop that feature working. You can put entries back from the Put back tab.\n\nAfterwards, clear every cache and check your site.',
+        skip='Leave entries that have changed since the scan, and fix the rest', done='Done. Now clear every cache: your host\'s page cache and object cache (Memcached), '
+             'and your page builder\'s cache. Until then the old content can still be served. Then check your site and scan again.',
+        none_ready='No entries are ready to fix. Ones already fixed are listed under Put back.',
+        undo_tab='Put back', undo_tick='Put back', undo_when='Fixed (UTC)', undo_button='Put back the ticked entries', undoing='Putting the original database values back',
+        undo_intro='Database entries this list has changed. Putting one back restores the entry exactly as it was, including any malware in it. '
+                   'An entry edited since it was fixed is left alone.',
+        undo_ready='{} entries are ready to put back. Press Put back the ticked entries.',
+        undo_confirm='Put {} database entries back exactly as they were?\n\nThe code that was removed becomes active again, including any malware in it.',
+        undone='Entries put back. Clear every cache, then check your site.', counted='fixed now',
+        stop='Stop now? Entries already fixed stay fixed. Check the list again afterwards: it carries on safely from where it stopped.'),
 }
 
 def source_text(label):
@@ -513,7 +539,8 @@ class ListWindow:
         self.back_chosen, self.back_seen = set(), set()
         self.top = top = tk.Toplevel(app.root)
         top.title(w['title'])
-        top.minsize(860, 720)
+        # Database rows describe code in words, which needs more room.
+        top.minsize(1100 if kind == 'dbfix' else 860, 720)
         # Big enough rows for the tick boxes to be easy to see and click.
         ttk.Style(top).configure('Treeview', rowheight=24, font=('Segoe UI', 10))
         self.boxes = {True: tick_box_image(top, True), False: tick_box_image(top, False)}
@@ -538,6 +565,9 @@ class ListWindow:
             for value, text in PRIORITIES:
                 ttk.Radiobutton(make, text=text, value=value, variable=self.priority).pack(side='left', padx=(0, 12))
             ttk.Checkbutton(make, text='Include files WordPress needs to run (not advised)', variable=self.critical).pack(side='left', padx=(0, 12))
+        elif kind == 'dbfix':
+            ttk.Label(make, wraplength=640, justify='left', text='The scan must have checked the database. Each line in the list is one piece of code. '
+                      'Findings you have marked as reviewed are left out, so review the ones that are yours first.').pack(side='left', padx=(0, 12))
         else:
             ttk.Label(make, wraplength=640, justify='left', text='For the best list, the scan should compare WordPress core files, plugins and themes with '
                       'official copies. Premium plugins and themes have no public copy, so they are left out.').pack(side='left', padx=(0, 12))
@@ -559,8 +589,12 @@ class ListWindow:
 
         move = ttk.Frame(self.tabs, padding=8)
         self.tabs.add(move, text=w['do_tab'])
-        second = ('priority', 'Priority', 70) if kind == 'quarantine' else ('source', 'Clean copy from', 230)
-        self.move_tree = self.tree(move, (('tick', w['do_tick'], 55), second, ('path', 'File', 380), ('rules', 'Found by', 160), ('state', 'Done', 90)), self.toggle_move)
+        if kind == 'dbfix':
+            columns = (('tick', w['do_tick'], 70), ('where', 'Where', 300), ('path', 'What it is', 360), ('rules', 'How it starts', 230), ('state', 'Done', 80))
+        else:
+            second = ('priority', 'Priority', 70) if kind == 'quarantine' else ('source', 'Clean copy from', 230)
+            columns = (('tick', w['do_tick'], 55), second, ('path', 'File', 380), ('rules', 'Found by', 160), ('state', 'Done', 90))
+        self.move_tree = self.tree(move, columns, self.toggle_move)
         row = ttk.Frame(move)
         row.pack(fill='x', pady=(6, 0))
         button(row, 'Tick all', lambda: self.set_moves(True))
@@ -584,7 +618,7 @@ class ListWindow:
         back = ttk.Frame(self.tabs, padding=8)
         self.tabs.add(back, text=w['undo_tab'])
         ttk.Label(back, wraplength=800, text=w['undo_intro']).pack(anchor='w', pady=(0, 6))
-        self.back_tree = self.tree(back, (('tick', w['undo_tick'], 80), ('path', 'File', 500), ('moved', w['undo_when'], 170)), self.toggle_back)
+        self.back_tree = self.tree(back, (('tick', w['undo_tick'], 80), ('path', 'Entry' if kind == 'dbfix' else 'File', 500), ('moved', w['undo_when'], 170)), self.toggle_back)
         row = ttk.Frame(back)
         row.pack(fill='x', pady=(6, 0))
         button(row, 'Tick all', lambda: self.set_backs(True))
@@ -649,7 +683,7 @@ class ListWindow:
             try:
                 plan = (folder / 'plan.txt').read_text(encoding='utf-8', errors='replace')
                 receipt = (folder / 'receipt.jsonl').read_text(encoding='utf-8', errors='replace') if (folder / 'receipt.jsonl').is_file() else ''
-                labels.append(f'{stamp_text(folder.name)}: {len(remote.plan_entries(plan))} files, {len(remote.active_files(remote.receipt_events(receipt)))} {self.words["counted"]}')
+                labels.append(f'{stamp_text(folder.name)}: {len(remote.plan_entries(plan))} {"pieces of code" if self.kind == "dbfix" else "files"}, {len(remote.active_files(remote.receipt_events(receipt)))} {self.words["counted"]}')
             except OSError:
                 labels.append(stamp_text(folder.name) + ': could not be read')
         self.choice.configure(values=labels)
@@ -700,11 +734,20 @@ class ListWindow:
             # Where the clean copies come from is the thing to check before swapping anything.
             self.sources.set('Clean copies from: ' + '; '.join(remote.clean(source.split(': ', 1)[-1], 200) for source in remote.plan_sources(plan)) if entries else '')
         states = remote.file_states(events)
+        pieces = self.pieces() if self.kind == 'dbfix' else {}
         for number, entry in enumerate(entries):
-            second = remote.clean(entry['priority'], 20) if self.kind == 'quarantine' else source_text(remote.clean(entry['source'], 80))
-            rules = remote.clean(entry['rules'], 120).replace(',', ', ') + (' (missing: put back)' if entry['sha256'] == 'missing' else '')
-            self.move_tree.insert('', 'end', iid=str(number), image=self.boxes[entry['ticked']], tags=('ticked' if entry['ticked'] else 'unticked',),
-                                  values=(second, remote.clean(entry['path']), rules, states.get(entry['path'], '')))
+            if self.kind == 'dbfix':
+                # One row per piece of code: where it is, what it is, and how it starts.
+                piece = pieces.get(entry['path'], {})
+                location = entry['path'].rsplit('#', 1)[0]
+                what, _ = sentinel.describe_script(piece.get('label', entry['rules']))
+                what = (what or remote.clean(entry['rules'], 80)) + (': uses tricks often used to hide malware' if piece.get('warn') else '')
+                values = (self.where(location, pieces), what, remote.clean(piece.get('excerpt', ''), 200), states.get(location, ''))
+            else:
+                second = remote.clean(entry['priority'], 20) if self.kind == 'quarantine' else source_text(remote.clean(entry['source'], 80))
+                rules = remote.clean(entry['rules'], 120).replace(',', ', ') + (' (missing: put back)' if entry['sha256'] == 'missing' else '')
+                values = (second, remote.clean(entry['path']), rules, states.get(entry['path'], ''))
+            self.move_tree.insert('', 'end', iid=str(number), image=self.boxes[entry['ticked']], tags=('ticked' if entry['ticked'] else 'unticked',), values=values)
         ticked = sum(entry['ticked'] for entry in entries)
         self.move_count.set(f'{ticked} of {len(entries)} ticked')
         moved = remote.active_files(events)
@@ -715,7 +758,8 @@ class ListWindow:
         for number, event in enumerate(moved):
             chosen = event['path'] in self.back_chosen
             self.back_tree.insert('', 'end', iid=str(number), image=self.boxes[chosen], tags=('ticked' if chosen else 'unticked',),
-                                  values=(remote.clean(event['path']), remote.clean(event.get('utc', ''), 19).replace('T', ' ')))
+                                  values=(self.where(event['path'], pieces) if self.kind == 'dbfix' else remote.clean(event['path']),
+                                          remote.clean(event.get('utc', ''), 19).replace('T', ' ')))
         self.back_count.set(f'{len(self.back_chosen)} of {len(paths)} ticked')
         if running:
             return
@@ -725,6 +769,19 @@ class ListWindow:
         last = self.last_check(self.steps['undo'], self.only())
         if last and last.get('ready'):
             self.back_button.configure(state='normal')
+
+    def pieces(self):
+        """For a database list: what the host said about each piece of code, by the key on its plan line."""
+        try:
+            value = json.loads((self.folder / 'fragments.json').read_text(encoding='utf-8'))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def where(self, location, pieces):
+        """A database entry in plain words, such as: Elementor content of "Home" (page 40)."""
+        context = next((piece.get('context') for piece in pieces.values() if isinstance(piece, dict) and piece.get('location') == location), None)
+        return remote.clean(sentinel.describe_database_finding({'source': 'database', 'location': location, 'context': context}).get('where') or location)
 
     def only(self):
         """Files to undo, or none to mean every file the list has changed."""
@@ -742,6 +799,10 @@ class ListWindow:
                 note = (f' {len(left)} findings were left out' + (f', {database} of them in the database, which this cannot change' if database else '')
                         + ': see What was left out.') if left else ''
                 first = 'Check where the clean copies come from and untick' if self.kind == 'replace' else 'Untick'
+                if self.kind == 'dbfix':
+                    self.status.set((f'List made: {len(entries)} pieces of code. Untick anything that is yours, such as your own analytics, then press Check the list.'
+                                     if entries else 'No database findings can be fixed this way.') + (f' {len(left)} findings were left out: see What was left out.' if left else ''))
+                    return
                 self.status.set((f'List made: {len(entries)} files. {first} any you want to keep, then press Check the list.' if entries else
                                  'No files qualify for a list.') + note)
             else:

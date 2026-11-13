@@ -59,6 +59,10 @@ WHAT IS NEW IN 0.25
   non-US site was reported as changed when it was not.
 - Quarantine and clean copies lists now also name the database findings they leave
   out, since they change files only.
+- Database fixes from your own computer: sentinel-remote.py db-plan, db-fix and db-undo
+  remove chosen pieces of flagged code (scripts, hidden iframes, PHP blocks) from
+  database entries, keep each original and can put it back. The app has a Database
+  fixes window for the same. See REMOTE.txt and APP.txt.
 - Database findings explained: the report and the app's Reviews window say where each
   is in plain words, and where each stored script loads from, naming well-known
   services and flagging unrecognised addresses and tell-tale malware tricks. Database

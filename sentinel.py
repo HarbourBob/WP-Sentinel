@@ -887,6 +887,27 @@ INLINE_SCRIPT_NAMES = {
 TABLE_NAMES = {'posts': 'content', 'postmeta': 'custom field', 'options': 'setting', 'comments': 'comment', 'commentmeta': 'comment field',
                'termmeta': 'category or tag field', 'usermeta': 'user field'}
 
+def describe_script(label):
+    """One label from the database helpers in plain words, and whether it is this site or a service Sentinel recognises."""
+    label = str(label)
+    if label in ('self', 'src:(this site)', 'iframe:(this site)'):
+        return 'this website itself', True
+    if label == 'json-ld':
+        return 'structured data for search engines (not code)', True
+    if label == 'php':
+        return 'PHP code stored in the database', False
+    if label.startswith(('src:', 'iframe:')):
+        kind, host = label.split(':', 1)
+        host = host.lower()
+        name = next((n for d, n in KNOWN_SCRIPT_HOSTS.items() if host == d or host.endswith('.' + d)), None)
+        text = f'{name} ({host})' if name else f'{host}, not a service Sentinel recognises'
+        return ('hidden frame loading ' + text if kind == 'iframe' else text), bool(name) and kind != 'iframe'
+    if label.startswith('inline:') and label[7:] in INLINE_SCRIPT_NAMES:
+        return INLINE_SCRIPT_NAMES[label[7:]] + ' (written into the page)', True
+    if label.startswith('inline'):
+        return 'code written into the page, not from a service Sentinel recognises', False
+    return ('hidden frame' if label == 'iframe' else ''), False
+
 def describe_database_finding(finding):
     """Plain words for a database finding: where it is, what its scripts are, and a one-line verdict.
     Returns {} for anything else."""
@@ -916,23 +937,13 @@ def describe_database_finding(finding):
         where = f'{kind} {row}' if kind else location
     scripts, unknown, suspicious = [], False, False
     for label in context.get('scripts') or []:
-        label = str(label)
-        if label == 'suspicious':
+        if str(label) == 'suspicious':
             suspicious = True
-        elif label in ('self', 'src:(this site)'):
-            scripts.append('this website itself')
-        elif label == 'json-ld':
-            scripts.append('structured data for search engines (not code)')
-        elif label.startswith('src:'):
-            host = label[4:].lower()
-            name = next((n for d, n in KNOWN_SCRIPT_HOSTS.items() if host == d or host.endswith('.' + d)), None)
-            unknown = unknown or not name
-            scripts.append(f'{name} ({host})' if name else f'{host}, not a service Sentinel recognises')
-        elif label.startswith('inline:') and label[7:] in INLINE_SCRIPT_NAMES:
-            scripts.append(INLINE_SCRIPT_NAMES[label[7:]] + ' (written into the page)')
-        elif label.startswith('inline'):
-            unknown = True
-            scripts.append('code written into the page, not from a service Sentinel recognises')
+            continue
+        text, recognised = describe_script(label)
+        if text:
+            scripts.append(text)
+            unknown = unknown or not recognised
     verdict = ''
     if suspicious:
         verdict = 'Code here uses tricks often used to hide malware (eval, atob, fromCharCode or document.write). Look at this one closely.'

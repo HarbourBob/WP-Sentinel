@@ -1,9 +1,10 @@
 WORDPRESS SENTINEL 0.25.0-rc1 — SCANNING, REVIEWS AND CLEAN-UP FROM A WINDOW (PROTOTYPE)
 
 sentinel-app.py is a window for sentinel-remote.py. You fill in your site's SSH details
-once, press Scan, and the report opens in your browser. Two more windows act on what the
-scan found: Quarantine moves files out of the website, and Clean copies swaps changed
-files for verified ones. Both can be undone. It runs exactly the same scan as
+once, press Scan, and the report opens in your browser. Three more windows act on what
+the scan found: Quarantine moves files out of the website, Clean copies swaps changed
+files for verified ones, and Database fixes removes flagged code from database entries.
+All three can be undone. It runs exactly the same scan as
 the command line, over SSH from your computer, and keeps the sealed evidence on your
 computer. Nothing is installed on the website. See REMOTE.txt for how that works.
 
@@ -144,6 +145,46 @@ Left out of the list, with the reason under What was left out: files with no off
 copy, such as anything in uploads (use Quarantine if they should not be there),
 wp-config.php and .htaccess, premium plugins and themes, and database findings.
 
+DATABASE FIXES: REMOVING FLAGGED CODE FROM THE DATABASE
+
+Quarantine and Clean copies change files. Database fixes change entries in the
+website's database: a post, a page-builder layout, a setting or a comment. It removes
+only the pieces of flagged code you tick, which can be a script, a hidden frame or a
+block of PHP. Everything else in the entry stays exactly as it is. This is new, and it
+changes live content, so back up your database first. On a live site it has so far
+been run on one post only; try it on a draft of your own before relying on it.
+
+Much of what a scan flags in the database is your own: analytics, embeds, custom code
+in a page builder. Mark those as reviewed first (see REVIEWS above). Reviewed findings
+are left out of the list, so what remains is what you have not accounted for.
+
+Scan with "Check the database" ticked, then press Database fixes, under Clean up.
+
+1. Make a list. Sentinel reads each flagged entry on the server. Nothing changes yet.
+   Each line is one piece of code: where it is, what it is, and how it starts.
+2. Untick anything that is yours. "What it is" names well-known services and says when
+   an address is not one Sentinel recognises, or when code uses tricks often used to
+   hide malware.
+3. Press Check the list. Each entry is checked against the scan. Nothing changes yet.
+4. Press Remove the ticked code, and confirm. For each entry the original is saved, the
+   change is made all at once or not at all, and the entry is read back to confirm that
+   nothing else in it changed.
+5. Clear every cache: your host's page cache and object cache (Memcached), and your
+   page builder's cache, such as Elementor's Regenerate Files. Until then visitors can
+   still be served the old content. Then check the site and scan again.
+
+To undo, open the Put back tab, tick the entries, press Check, then Put back the ticked
+entries. An entry is restored exactly as it was. One that has been edited since it was
+fixed is left alone, so a later edit is never overwritten.
+
+It refuses, and says why under What was left out or when checking: entries that
+changed since the scan; user account rows; entries over 4 MiB; values holding PHP
+objects or packed in a way that cannot be rebuilt exactly; code that could not be
+removed without damaging the data around it; and tables without all-or-nothing
+changes or with database triggers. Those need editing by hand, in WordPress or your
+page builder. It does not delete rows, accounts or settings, and it does not close the
+way the code got in.
+
 UNLOCKING YOUR KEY
 
 Unlock key uses Windows' OpenSSH Authentication Agent. If the window says the agent is not
@@ -181,9 +222,9 @@ Stop during a scan                The temporary .sentinel-run- folder may be lef
 
 LIMITS OF THIS PROTOTYPE
 
-It covers scanning one site, checking evidence, opening the results, and quarantine and
-clean copies for the files in a scan. Scanning every site on an account, your own ZIPs
-as clean copies, database changes, alerts and scheduled runs still use the command
+It covers scanning one site, checking evidence, opening the results, and quarantine,
+clean copies and database fixes for what a scan found. Scanning every site on an
+account, your own ZIPs as clean copies, alerts and scheduled runs still use the command
 line. Undo at most 200 chosen files at a time, or tick them all. Scans run with --unattended, so they never stop to ask a question; the
 database check therefore always reads wp-config.php instead of prompting. On Mac and Linux
 the window works, but Unlock key and confirming the server show a command to run in a

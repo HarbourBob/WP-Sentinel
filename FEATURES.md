@@ -88,6 +88,10 @@ Every action below previews first and needs `--apply` to make a change.
 - **Quarantine from your computer:** make a list from a saved scan, untick what to keep,
   check it, then move the files out and put them back, with nothing left installed on
   the host. From the command line or the app's Quarantine window.
+- **Database fixes from your computer:** remove chosen pieces of flagged code (scripts,
+  hidden iframes, PHP blocks) from database entries, one reviewed list at a time. Each
+  original is kept, the change is all-or-nothing, and it can be undone. From the command
+  line or the app's Database fixes window.
 - **Reviews from your computer:** mark a finding you checked as harmless. It is counted
   apart in the report and left out of lists until the file changes. From the command
   line or the app's Reviews window.

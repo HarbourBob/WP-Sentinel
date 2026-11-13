@@ -2,9 +2,14 @@
 
 > **Back up your site first, if at all possible.** Keep the backup away from the website.
 
-WP Sentinel scans a WordPress site and its database over SSH for signs of compromise, and
-helps you deal with what it finds. It produces a report you can read in a browser, and it
-can move reviewed files into a private quarantine or swap them for verified clean copies.
+WP Sentinel scans a WordPress site and its database over SSH, but hosted on your own PC for 
+signs of compromise, and helps you deal with what it finds. It produces a report you can 
+read in a browser, and it can move reviewed files into a private quarantine or swap them 
+for verified clean copies.
+
+WP Sentinel has an intuitive Windows-based interface of lists, tickboxes, settings and buttons.
+Useful for people not familiar with SSH or who don't like the idea of typing long strings
+into the terminal.
 
 Current release: **0.25.0-rc1**
 

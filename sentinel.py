@@ -81,11 +81,16 @@ def detect(text, kinds=('php', 'js', 'htaccess'), location=''):
         if 'literals' in rule and not any(item in lowered for item in rule['literals']):
             continue
         if rule.get('scope') == 'normalized':
-            if len(text) > 5242880 or not STRING_TRICK.search(text) or rule['patterns'][0].search(text):
+            if len(text) > 5242880 or not STRING_TRICK.search(text):
                 continue
             if normalized is None:
-                normalized = normalize_php(text)
-            if rule['patterns'][0].search(normalized):
+                # Compare each string expression independently; a plain name elsewhere
+                # must not suppress a different, obfuscated function name.
+                quoted = r"(?:'(?:(?:\\.)|[^'\\])*'|\"(?:(?:\\.)|[^\"\\])*\")"
+                expressions = re.finditer(quoted + r'(?:\s*\.\s*' + quoted + r')*', text)
+                normalized = [(item.group(), normalize_php(item.group())) for item in expressions if STRING_TRICK.search(item.group())]
+            if any(before != after and rule['patterns'][0].search(after) and not rule['patterns'][0].search(before)
+                   for before, after in normalized):
                 findings.append(dict(rule=rule['id'], severity=rule['severity'], reason=rule['reason'], line=None))
             continue
         matches = [pattern.search(text) for pattern in rule['patterns']]
@@ -253,7 +258,7 @@ def owner_names(entries):
             pass
     return names
 
-def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
+def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=(), coverage=None):
     findings, files, limitations = [], {}, []
     if inventory is not None:
         inventory.update(format='sentinel-file-inventory-1', site_root=str(root), status='in-progress',
@@ -388,6 +393,9 @@ def scan_files(root, max_bytes, max_files, inventory=None, separate_sites=()):
         inventory.update(status='finished', traversal_complete=inventory['traversal_complete'] and not stopped,
                          finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                          limitations=list(limitations), skipped_counts=skipped, owner_names=owner_names(inventory['entries']))
+    if coverage is not None:
+        coverage.update(status='partial' if stopped or any(skipped.values()) else 'completed',
+                        skipped_counts=dict(skipped), file_limit_reached=stopped)
     return findings, files, limitations, visited
 
 def core_manifest(version, locale):
@@ -426,8 +434,10 @@ def download(url, path, limit):
 
 def mark_verified(findings, verified):
     """A file matching its official copy is not malware that was added, so stop ranking it as a risk."""
+    heuristics = {rule['id'] for rule in (_rule_pack or load_rules())['file_rules'] if not rule.get('only_paths')}
     for finding in findings:
-        if finding.get('source') == 'file' and finding.get('location') in verified and finding.get('severity') in ('high', 'medium', 'review'):
+        if (finding.get('source') == 'file' and finding.get('location') in verified
+                and finding.get('rule') in heuristics and finding.get('severity') in ('high', 'medium', 'review')):
             finding.update(original_severity=finding['severity'], severity='info', verified_official=True,
                            reason='Verified official: this file matches the official copy, so the match below is the original code, not an addition. ' + finding.get('reason', ''))
 
@@ -829,9 +839,25 @@ def check_active_plugins(sites, hashes):
                                     reason='Active plugin file was not seen in this scan. It may be removed, skipped by a limit, or in a custom plugin folder.'))
     return results
 
+def read_version_header(root):
+    path = root / 'wp-includes' / 'version.php'
+    if any(part.is_symlink() for part in (root, path.parent, path)):
+        raise ValueError('Version file must not be symlinked.')
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0)
+    with os.fdopen(os.open(path, flags), 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('Version file must be a regular file.')
+        data = stream.read(65536)
+        after = os.fstat(stream.fileno())
+        if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('Version file changed during inspection.')
+    return data.decode('utf-8', errors='replace')
+
+
 def detect_core_version(root):
     """Read the version from wp-includes/version.php as text; it is never executed."""
-    data = (root / 'wp-includes' / 'version.php').read_bytes()[:65536].decode('utf-8', errors='replace')
+    data = read_version_header(root)
     match = re.search(r'''^\s*\$wp_version\s*=\s*['"]([^'"]+)['"]''', data, re.M)
     if not match:
         raise ValueError('Could not find a version in wp-includes/version.php')
@@ -839,27 +865,41 @@ def detect_core_version(root):
 
 def detect_core_locale(root):
     """The language edition, from $wp_local_package in wp-includes/version.php. Without one, it is en_US."""
-    data = (root / 'wp-includes' / 'version.php').read_bytes()[:65536].decode('utf-8', errors='replace')
+    data = read_version_header(root)
     match = re.search(r'''^\s*\$wp_local_package\s*=\s*['"]([A-Za-z_]{2,20})['"]''', data, re.M)
     return match.group(1) if match else 'en_US'
 
 def software_inventory(root):
-    """Installed core, plugin and theme versions, read from headers as text, for the vulnerability check."""
-    software = {'core': None, 'plugins': [], 'themes': []}
+    """Keep coverage failures visible without discarding the completed scan."""
+    software = {'core': None, 'plugins': [], 'themes': [], 'limitations': []}
     try:
         software['core'] = detect_core_version(root)
     except (OSError, ValueError):
-        pass
+        software['limitations'].append('Core version could not be read safely.')
     for kind, reader in (('plugins', plugin_version), ('themes', theme_version)):
         base = root / 'wp-content' / kind
-        if base.is_symlink() or (root / 'wp-content').is_symlink() or not base.is_dir():
+        if base.is_symlink() or (root / 'wp-content').is_symlink():
+            software['limitations'].append(kind + ': symlinked folder was not inventoried.')
             continue
-        for directory in sorted(base.iterdir()):
-            if directory.is_symlink() or not directory.is_dir() or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', directory.name):
+        if not base.is_dir():
+            continue
+        try:
+            directories = sorted(base.iterdir())
+        except OSError:
+            software['limitations'].append(kind + ': folder could not be listed.')
+            continue
+        for directory in directories:
+            if directory.is_symlink():
+                software[kind].append({'slug': directory.name, 'version': None, 'reason': 'Symlinked entry was not inspected.'})
+                continue
+            if directory.is_file() and kind == 'plugins' and directory.suffix.lower() == '.php' and directory.name != 'index.php':
+                software[kind].append({'slug': directory.name, 'version': None, 'reason': 'Standalone plugin; feed identity is unresolved. Check against a trusted copy.'})
+                continue
+            if not directory.is_dir() or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', directory.name):
                 continue
             try:
                 version = reader(directory)
-            except OSError:
+            except (OSError, ValueError):
                 version = None
             software[kind].append({'slug': directory.name, 'version': version})
     return software
@@ -1107,8 +1147,9 @@ def main():
     output.mkdir(parents=True, mode=0o700)
     print('Scanning files with rule pack ' + pack['version'] + '. No website files will be modified.', flush=True)
     file_inventory = {} if args.file_inventory else None
-    findings, hashes, limitations, visited = scan_files(root, args.max_file_mb * 1024 * 1024, args.max_files, file_inventory, set(args.separate_site))
-    if file_inventory is not None:
+    file_coverage = {}
+    findings, hashes, limitations, visited = scan_files(root, args.max_file_mb * 1024 * 1024, args.max_files, file_inventory, set(args.separate_site), file_coverage)
+    if args.file_inventory:
         pending = output / 'file-inventory.json.tmp'
         with pending.open('x', encoding='utf-8') as stream:
             json.dump(file_inventory, stream, indent=2)
@@ -1116,7 +1157,8 @@ def main():
             os.fsync(stream.fileno())
         os.replace(pending, output / 'file-inventory.json')
         print('File inventory saved: ' + str(output / 'file-inventory.json'), flush=True)
-    checks = {'core': 'not requested', 'database': 'not requested', 'plugins': 'not requested'}
+    checks = {'core': 'not requested', 'database': 'not requested', 'plugins': 'not requested',
+              'files': file_coverage}
     verified = set()
     if args.core_version:
         print('Downloading official core checksums...', flush=True)
@@ -1226,10 +1268,13 @@ def main():
     # Most important first. Finding numbers in the report and commands follow this order.
     findings.sort(key=lambda item: SEVERITIES.index(item['severity']) if item['severity'] in SEVERITIES else len(SEVERITIES))
     priorities = {level: sum(item['severity'] == level for item in findings) for level in SEVERITIES}
+    software = software_inventory(root)
+    if software.get('limitations'):
+        checks['software'] = {'status': 'partial', 'limitations': software['limitations']}
     report = dict(version=VERSION, rules_version=pack['version'], site_root=str(root), priority_counts=priorities, created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                   entries_visited=visited, files_inspected=len(hashes), checks=checks, findings=findings, limitations=limitations,
-                  software=software_inventory(root))
-    if file_inventory is not None:
+                  software=software)
+    if args.file_inventory:
         report['file_inventory'] = {'filename': 'file-inventory.json', 'hashed_files': sum(e['status'] == 'hashed' for e in file_inventory['entries'].values()), 'traversal_complete': file_inventory['traversal_complete'], 'note': 'Saved from the file-scan phase; exclusions and skipped paths are listed in the inventory. Not an atomic snapshot or clean baseline.'}
     write_atomic(output / 'report.json', json.dumps(report, indent=2))
     write_atomic(output / 'report.html', render_report(report, output / 'report.json', args.command_profile))
@@ -1248,6 +1293,12 @@ def main():
         status = 3
     if isinstance(checks.get('persistence'), dict) and checks['persistence'].get('status') == 'partial':
         print('PARTIAL: some startup locations or account-crontab details could not be inspected. See the report.')
+        status = 3
+    if any(isinstance(value, dict) and value.get('status') == 'partial' for value in checks.values()):
+        status = 3
+    if any(isinstance(value, list) and any(item.get('status') in ('FAILED', 'unverified') or item.get('unchecked_files', 0) for item in value) for value in checks.values()):
+        status = 3
+    if args.core_version and checks['core'].startswith('Compared') and unchecked:
         status = 3
     if args.fail_on:
         threshold = SEVERITIES[:SEVERITIES.index(args.fail_on) + 1]

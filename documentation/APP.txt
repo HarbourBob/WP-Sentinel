@@ -202,6 +202,10 @@ log in to your hosting account, so a passphrase is better.
 
 IF IT GOES WRONG
 
+"Some checks could not be         Not a failure: the scan finished and was sealed. Something
+completed"                        could not be checked in full, most often premium or custom
+                                  plugins and themes, which have no public copy to compare
+                                  with. "Coverage and limitations" in the report lists them.
 "has not met this server before"  Confirm the server, as in step 3.
 "not the one this computer        The server's identity has changed, usually because your
 remembers"                        host moved your site to a new server. Ask your host to

@@ -155,8 +155,13 @@ def failed_checks(report):
             gaps.append(f'{name}: {value}')
         elif isinstance(value, dict) and value.get('status') in ('partial', 'failed'):
             gaps.append(f'{name}: {value["status"]}')
+        elif isinstance(value, str) and name == 'core' and re.search(r'; [1-9][0-9]* manifest files unchecked', value):
+            gaps.append('core: manifest files unchecked')
         elif isinstance(value, list):
-            gaps.extend(f'{name}: {entry.get("target", "")} failed' for entry in value if isinstance(entry, dict) and entry.get('status') == 'FAILED')
+            for entry in value:
+                if isinstance(entry, dict) and (entry.get('status') in ('FAILED', 'unverified', 'partial') or entry.get('unchecked_files', 0)):
+                    label = entry.get('target', entry.get('plugin', entry.get('theme', '')))
+                    gaps.append(f'{name}: {label} incomplete')
     return sorted(clean(gap) for gap in gaps)
 
 def assess(report, state, config, file_counts=None):

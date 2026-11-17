@@ -370,6 +370,12 @@ class App:
             if code == 0:
                 self.status.set('Scan finished and sealed. Opening the report.')
                 self.open_page('report.html')
+            elif code == 3:
+                # Finished and sealed, but something could not be checked in full. That is usual:
+                # premium and custom plugins and themes have no public copy to compare with.
+                self.status.set('Scan finished and sealed. Some checks could not be completed, such as plugins with no public copy '
+                                'to compare with: see "Coverage and limitations" in the report. Opening the report.')
+                self.open_page('report.html')
             else:
                 self.status.set('The scan did not finish (exit ' + str(code) + '). See the messages below.')
         self.run(argv, 'Scanning (this can take several minutes)', done)

@@ -78,10 +78,22 @@ def read_key(key_file=None):
 
 def slim(feed):
     """Keep only what matching and the report need; the full feed is large."""
+    if not isinstance(feed, dict) or not feed:
+        raise ValueError('The vulnerability feed is empty or has an unsupported format.')
     index = []
     for vid, record in feed.items():
-        if not isinstance(record, dict) or not isinstance(record.get('software'), list):
-            continue
+        if not isinstance(record, dict) or not isinstance(record.get('software'), list) or not record['software']:
+            raise ValueError('The vulnerability feed contains an invalid record.')
+        for item in record['software']:
+            if not isinstance(item, dict) or item.get('type') not in ('core', 'plugin', 'theme'):
+                raise ValueError('The vulnerability feed contains an unsupported software record.')
+            ranges = item.get('affected_versions')
+            if not isinstance(ranges, dict) or not ranges:
+                raise ValueError('The vulnerability feed has no valid affected versions.')
+            for rng in ranges.values():
+                if (not isinstance(rng, dict) or not all(isinstance(rng.get(key), str) and rng[key] for key in ('from_version', 'to_version'))
+                        or not all(type(rng.get(key)) is bool for key in ('from_inclusive', 'to_inclusive'))):
+                    raise ValueError('The vulnerability feed contains an invalid version range.')
         cvss = record.get('cvss') if isinstance(record.get('cvss'), dict) else {}
         refs = [r for r in record.get('references') or [] if isinstance(r, str) and r.startswith('https://')]
         rights = record.get('copyrights') if isinstance(record.get('copyrights'), dict) else {}
@@ -123,7 +135,8 @@ def download(key, cache):
         downloaded = now().isoformat()
         index = slim(json.loads(pending.read_text(encoding='utf-8')))
     finally:
-        pending.unlink(missing_ok=True)
+        if pending.exists():
+            pending.unlink()
     write_index(index, cache, downloaded)
     return {'downloaded_utc': downloaded, 'vulnerabilities': index}
 
@@ -169,7 +182,7 @@ def check(software, feed, notes=()):
             if entry.get('version'):
                 installed.append((label, entry['slug'], entry['slug'], entry['version']))
             else:
-                unchecked.append(dict(type=label, slug=entry['slug'], reason='No readable version header.'))
+                unchecked.append(dict(type=label, slug=entry['slug'], reason=entry.get('reason', 'No readable version header.')))
     found = []
     for kind, slug, name, version in installed:
         for record, item in by_key.get((kind, slug), []):
@@ -186,7 +199,7 @@ def check(software, feed, notes=()):
     counts['unrated'] = sum(1 for v in found if v['rating'] is None and not v['informational'])
     return dict(format='sentinel-vulnerabilities-1', source=SOURCE, feed_downloaded_utc=feed['downloaded_utc'], created_utc=now().isoformat(), note=NOTE,
                 checked=len(installed), affected_software=len({(v['type'], v['slug']) for v in found}), counts=counts,
-                vulnerabilities=found, unchecked=unchecked, limitations=list(notes))
+                vulnerabilities=found, unchecked=unchecked, limitations=list(notes) + list(software.get('limitations', [])))
 
 def render(result):
     e = lambda v: html.escape('' if v is None else str(v))

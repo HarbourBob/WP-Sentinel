@@ -293,11 +293,24 @@ def send_alerts(args, monitoring, config, site_dir, run_dir, comparison):
     return bool(outcome['failures'])
 
 def previous_run(site_dir, current):
-    """Newest earlier run holding a finished inventory, by name, which starts with its UTC time."""
-    for run_dir in sorted((p for p in site_dir.iterdir() if p.is_dir() and p.name < current), reverse=True):
-        if (run_dir / 'file-inventory.json').is_file():
-            return run_dir
-    return None
+    """Prefer recorded completion order; random folder suffixes are not chronological."""
+    try:
+        chain = json.loads((site_dir / 'chain.json').read_text(encoding='utf-8'))
+        entries = chain['runs']
+        current_index = next((i for i, item in enumerate(entries) if item.get('run') == current), len(entries))
+        for item in reversed(entries[:current_index]):
+            name = item.get('run', '')
+            if RUN_FOLDER.fullmatch(name) and not item.get('pruned_utc'):
+                path = site_dir / name
+                if (path / 'file-inventory.json').is_file():
+                    return path
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    candidates = [path for path in site_dir.iterdir()
+                  if path.is_dir() and RUN_FOLDER.fullmatch(path.name) and path.name != current
+                  and path.name[:16] <= current[:16] and (path / 'file-inventory.json').is_file()]
+    return max(candidates, key=lambda path: (path.name[:16], (path / 'file-inventory.json').stat().st_mtime_ns), default=None)
+
 
 def compare_with_previous(site_dir, run_dir):
     earlier = previous_run(site_dir, run_dir.name)

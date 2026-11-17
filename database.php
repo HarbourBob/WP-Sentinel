@@ -38,9 +38,9 @@ function script_summary($text, $selfHosts) {
     $labels = array_values(array_unique($labels));
     return array_slice($labels, 0, 12);
 }
-function state_finding($table, $name, $rule, $severity, $reason, $hashed, $context) {
+function state_finding($table, $name, $rule, $severity, $reason, $hashed, $context, $complete = true) {
     return ['source' => 'database', 'location' => "$table:option_name=$name", 'severity' => $severity, 'rule' => $rule, 'reason' => $reason, 'line' => null,
-            'sha256' => hash('sha256', $hashed), 'content_complete' => true, 'hash_scope' => 'Normalized value described by this finding', 'context' => $context];
+            'sha256' => $complete ? hash('sha256', $hashed) : null, 'content_complete' => $complete, 'hash_scope' => 'Normalized value described by this finding', 'context' => $context];
 }
 try {
     if (!function_exists('mysqli_init')) { throw new Exception('missing extension'); }
@@ -193,30 +193,43 @@ try {
         $table = $sitePrefix . 'options';
         $site = ['table' => $table, 'active_plugins' => []];
         try {
-            $values = [];
-            $rows = $db->query("SELECT option_name, LEFT(option_value, $valueLimit) AS val FROM `$table` WHERE option_name IN ('siteurl', 'home', 'active_plugins', 'cron')");
-            while ($row = $rows->fetch_assoc()) { $values[$row['option_name']] = (string)$row['val']; }
+            $values = []; $complete = [];
+            $rows = $db->query("SELECT option_name, LEFT(option_value, $valueLimit) AS val, CHAR_LENGTH(option_value) AS size FROM `$table` WHERE option_name IN ('siteurl', 'home', 'active_plugins', 'cron')");
+            while ($row = $rows->fetch_assoc()) {
+                $name = $row['option_name'];
+                $values[$name] = (string)$row['val'];
+                $complete[$name] = isset($row['size']) && (int)$row['size'] <= $valueLimit;
+                if (!$complete[$name]) {
+                    $partial = true;
+                    $limitations[] = "$table: $name was truncated; its state fingerprint is unavailable.";
+                }
+            }
             $rows->free();
             foreach (['siteurl', 'home'] as $name) {
                 if (isset($values[$name])) {
-                    $findings[] = state_finding($table, $name, 'wp-site-url', 'info', 'Recorded so a change between scans stands out.', trim($values[$name]), ['host' => substr(site_host($values[$name]), 0, 191)]);
+                    $findings[] = state_finding($table, $name, 'wp-site-url', 'info', 'Recorded so a change between scans stands out.', trim($values[$name]), ['host' => substr(site_host($values[$name]), 0, 191)], $complete[$name]);
                 }
             }
             if (isset($values['siteurl'], $values['home']) && site_host($values['siteurl']) !== site_host($values['home'])) {
-                $findings[] = state_finding($table, 'siteurl', 'site-url-host-mismatch', 'medium', 'siteurl and home point to different hosts. Attackers change these to redirect a site; some setups do this on purpose.', $values['siteurl'] . "\0" . $values['home'], ['siteurl_host' => substr(site_host($values['siteurl']), 0, 191), 'home_host' => substr(site_host($values['home']), 0, 191)]);
+                $findings[] = state_finding($table, 'siteurl', 'site-url-host-mismatch', 'medium', 'siteurl and home point to different hosts. Attackers change these to redirect a site; some setups do this on purpose.', $values['siteurl'] . "\0" . $values['home'], ['siteurl_host' => substr(site_host($values['siteurl']), 0, 191), 'home_host' => substr(site_host($values['home']), 0, 191)], $complete['siteurl'] && $complete['home']);
             }
             if (isset($values['active_plugins'])) {
                 preg_match_all('/s:\d+:"([^"]*)"/', $values['active_plugins'], $found);
                 $plugins = array_values(array_unique($found[1]));
                 sort($plugins);
                 $site['active_plugins'] = array_slice($plugins, 0, 1000);
-                $findings[] = state_finding($table, 'active_plugins', 'wp-active-plugins', 'info', 'Active plugin list, recorded so a change between scans stands out.', json_encode($plugins, JSON_INVALID_UTF8_SUBSTITUTE), ['count' => count($plugins)]);
+                $site['active_plugins_complete'] = $complete['active_plugins'] && count($plugins) <= 1000;
+                if (count($plugins) > 1000) {
+                    $partial = true;
+                    $limitations[] = "$table: active plugin file checks limited to the first 1000 entries.";
+                }
+                $findings[] = state_finding($table, 'active_plugins', 'wp-active-plugins', 'info', 'Active plugin list, recorded so a change between scans stands out.', json_encode($plugins, JSON_INVALID_UTF8_SUBSTITUTE), ['count' => count($plugins)], $complete['active_plugins']);
             }
             if (isset($values['cron'])) {
                 preg_match_all('/s:\d+:"([^"]+)";a:\d+:\{s:32:"[a-f0-9]{32}";/', $values['cron'], $found);
                 $hooks = array_values(array_unique($found[1]));
                 sort($hooks);
-                $findings[] = state_finding($table, 'cron', 'wp-cron-hooks', 'info', 'Scheduled WordPress hooks, recorded so a new hook between scans stands out.', json_encode($hooks, JSON_INVALID_UTF8_SUBSTITUTE), ['count' => count($hooks), 'hooks' => array_slice($hooks, 0, 200)]);
+                $findings[] = state_finding($table, 'cron', 'wp-cron-hooks', 'info', 'Scheduled WordPress hooks, recorded so a new hook between scans stands out.', json_encode($hooks, JSON_INVALID_UTF8_SUBSTITUTE), ['count' => count($hooks), 'hooks' => array_slice($hooks, 0, 200)], $complete['cron']);
             }
         } catch (Throwable $error) {
             $partial = true;
@@ -235,9 +248,14 @@ try {
         try {
             $rows = $db->query($query);
             while ($row = $rows->fetch_assoc()) {
+                $definitionComplete = isset($row['body']);
+                if (!$definitionComplete) {
+                    $partial = true;
+                    $limitations[] = "Database $kind definition was not visible; its fingerprint is unavailable.";
+                }
                 $findings[] = ['source' => 'database', 'location' => 'database:' . $kind . '=' . substr((string)$row['name'], 0, 64), 'severity' => 'medium', 'rule' => 'db-stored-' . $kind,
                                'reason' => "Database $kind found. WordPress does not create these; a plugin may, and so can an attacker. Its body is not included in this report.", 'line' => null,
-                               'sha256' => hash('sha256', (string)$row['body']), 'content_complete' => true, 'hash_scope' => 'Stored definition'];
+                               'sha256' => $definitionComplete ? hash('sha256', (string)$row['body']) : null, 'content_complete' => $definitionComplete, 'hash_scope' => 'Stored definition'];
             }
             $rows->free();
         } catch (Throwable $error) {

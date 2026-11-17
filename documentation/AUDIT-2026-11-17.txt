@@ -1,0 +1,119 @@
+WP SENTINEL REVIEW - 17 NOVEMBER 2026
+
+Scope: the current 0.25.0-rc1 source at WP Sentinel/outputs/wp-sentinel.
+The chat's original Hosting Account folder no longer existed. This review used
+explicit source paths, disposable local sites and simulated services.
+No website connection, database connection, email or webhook was used.
+Existing site evidence and quarantine contents were not inspected or modified.
+
+RESULT
+
+Reproducible defects were found and corrected. This is a local reviewed revision,
+not a guarantee that every feature works on every host. The release label remains
+0.25.0-rc1; package-manifest.json identifies the revised file contents.
+Existing distribution ZIP files were not rebuilt and still contain the old code.
+
+CORRECTIONS
+
+1. Obfuscation detection could be disabled by an unrelated plain function name
+   elsewhere in the file. Each quoted string expression is now checked separately.
+   Tests cover both the missed obfuscated name and a plain-name false positive.
+
+2. Matching official checksums downgraded ALL findings for that file, including a
+   mismatch against a user-supplied reference. Only eligible content heuristics now
+   receive that downgrade; integrity and location findings remain visible.
+
+3. An unreadable plugin/theme directory could abort final report creation after
+   the scan had finished. Inventory failures now become explicit coverage gaps,
+   and the report is still saved.
+
+4. Core version/locale discovery read the whole file before slicing it, and
+   followed symlinks skipped by the scanner. The actual read is now bounded to
+   64 KiB and requires a regular, non-symlinked version file.
+
+5. Standalone PHP plugins disappeared from vulnerability coverage. They now
+   appear as unchecked, with unresolved identity, rather than silently disappearing.
+   This does not add automatic identification of standalone plugins.
+
+6. Invalid vulnerability feeds could become successful empty results. Incoming
+   records and version ranges now require the expected structure. Invalid input
+   fails visibly rather than being saved as a clean feed. The download cleanup
+   also no longer requires pathlib's Python-3.8-only missing_ok argument on a
+   host documented to support Python 3.7.
+
+7. A scan stopped by its file limit could return success, and unavailable plugin
+   checks could be silent in alerts. File coverage is now recorded independently
+   of saving a full inventory. Incomplete file/software/integrity checks return
+   exit 3; matching --fail-on findings still take precedence with exit 4.
+   Monitoring recognizes unavailable references and unchecked core/plugin files.
+   Expect more partial results on sites with intentionally skipped content.
+
+8. An unreadable site-root directory was recorded as '.', but comparison treated
+   paths beneath it as inspected. Such paths now remain unknown, not added/missing.
+
+9. Database state queries truncated cron/active-plugin values but marked their
+   fingerprints complete. They now check the original length, withhold incomplete
+   fingerprints and report partial coverage. The 1,000 active-plugin listing cap
+   also has an explicit coverage warning.
+
+10. Hidden stored-procedure/event/trigger definitions (NULL) were hashed as an
+    empty string and marked complete. They now have no complete fingerprint and
+    produce a coverage gap.
+
+11. Deeply nested serialized database values could fall through to plain-text
+    removal, corrupting internal string lengths. They are now refused before
+    transformation. Array traversal also has a depth bound. Normal text and
+    supported serialized values still pass transformation checks.
+
+12. Remote comparisons ordered same-second runs by their random folder suffix.
+    They now prefer recorded completion order from the evidence chain.
+
+VALIDATION
+
+- All 20 production Python files parsed successfully.
+- All three production PHP helpers passed syntax checking.
+- Help/argument initialization worked for 14 command-line entry points.
+- All 43 original manifest entries matched before any modification.
+- 34 new offline regression/workflow tests pass, with no skips on this machine.
+- 27 compatible legacy tests were also run: 26 passed; one real symlink test
+  was skipped because this Windows account cannot create symlinks.
+
+The new tests exercise scanner reports, coverage exits, fingerprint review rules,
+batch quarantine/restore, replacement/undo, no-overwrite guards, two hosted routine
+runs and their comparison, inventory gaps, discovery, timeline/checklist rendering,
+evidence tampering detection and archive path rejection, alert retry/deduplication,
+vulnerability matching/validation, and database transformation/coverage behavior.
+The GUI and its three repair windows plus Reviews were constructed in a hidden
+Tk session; apply/undo buttons start disabled. This is a construction smoke test,
+not full interactive verification of every button or display size.
+The remote scan pipeline ran twice against local disposable sites with a simulated
+transport; real scanning, comparison, sealing and report generation executed.
+The database scanner used a PHP database stand-in; its SQL did not run on MySQL.
+
+The older suite found beside OLD-wp-sentinel is not a current release test suite.
+Its initial full run: 61 tests, 50 passed, 7 failures, 3 errors, 1 skipped.
+Several assumptions predate deliberate changes (configuration scanning, extra
+rules, tuple checksum values and the -B Python switch). The old routine-status
+API also expected detailed changed-file paths that the current brief status omits;
+those paths remain in the separate comparison report. The old suite has not been
+silently rewritten to make those historical expectations pass.
+
+REMAINING VALIDATION
+
+Real Linux permissions, real symlink handling, SSH authentication and transfer
+interruptions, real MySQL/MariaDB transactions and locking, crash/power-loss
+recovery, real alert delivery, and a current live vulnerability feed still need
+hosted staging checks. Detection rate on real malware remains unmeasured.
+This review does not repeat the earlier clean WordPress/plugin corpus experiment.
+The README links to LICENSE, but LICENSE is absent from this supplied folder;
+restore the intended licence file before distributing the package.
+
+RUN THE INCLUDED TESTS
+
+python -B -m unittest discover -s tests -v
+python -B -I -S verify-package.py
+
+Tests require no credentials and use temporary fixtures. PHP and GUI tests skip
+explicitly when their prerequisites are unavailable. tests/fake_database.php is a
+namespaced test stand-in and must never be used as a production database helper.
+The tests folder is for development and is not required by the hosting manifest.

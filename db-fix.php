@@ -137,13 +137,15 @@ function clean_text($text, $remove, &$found, $selfHosts) {
 // string carries its length, so those are unpacked, cleaned string by string and packed again. Values
 // holding objects, or that do not pack back to exactly what was stored, are refused.
 function clean_value($value, $remove, &$found, $selfHosts, $depth = 0) {
-    if ($depth > 4 || !preg_match('/^(?:a:\d+:\{|O:\d+:"|C:\d+:"|s:\d+:")/', $value)) { return clean_text($value, $remove, $found, $selfHosts); }
+    if (!preg_match('/^(?:a:\d+:\{|O:\d+:"|C:\d+:"|s:\d+:")/', $value)) { return clean_text($value, $remove, $found, $selfHosts); }
+    if ($depth > 4) { fail_safe('serialized-value-unsupported'); }
     $data = @unserialize($value, ['allowed_classes' => false, 'max_depth' => 64]);
     if ($data === false || serialize($data) !== $value) { fail_safe('serialized-value-unsupported'); }
-    $walk = function ($item) use (&$walk, $remove, &$found, $selfHosts, $depth) {
+    $walk = function ($item, $level = 0) use (&$walk, $remove, &$found, $selfHosts, $depth) {
+        if ($level > 64) { fail_safe('serialized-value-unsupported'); }
         if (is_object($item)) { fail_safe('serialized-objects-unsupported'); }
         if (is_array($item)) {
-            foreach ($item as $key => $inner) { $item[$key] = $walk($inner); }
+            foreach ($item as $key => $inner) { $item[$key] = $walk($inner, $level + 1); }
             return $item;
         }
         return is_string($item) ? clean_value($item, $remove, $found, $selfHosts, $depth + 1) : $item;

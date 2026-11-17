@@ -85,7 +85,8 @@ rules.json holds "file_rules" (Python regular expressions) and "database_rules"
                 the rule miss things, so list only text every match must contain.
   flags         Optional: "im" adds multi-line matching. Matching ignores case.
   scope         Optional: "normalized" matches only after joining string pieces and
-                decoding escapes, and only if the raw text does not match.
+                decoding escapes in each string expression. A plain function name elsewhere
+                in the file does not suppress a separate obfuscated name.
   only_paths, exclude_paths   Optional path prefixes.
 
 Avoid patterns with nested repetition: a slow pattern can stall a scan. Use --rules

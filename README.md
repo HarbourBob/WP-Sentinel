@@ -8,6 +8,17 @@ can move reviewed files into a private quarantine or swap them for verified clea
 
 Current release: **0.25.0-rc1**
 
+## Status: new and largely untested, with no guarantees
+
+This is new software, offered for testing under the [MIT licence](LICENSE), with no
+warranty. It may not work on your host, it may miss malware, and it may flag innocent
+files. It has been run on one real site. How much real malware the rules catch has not
+been measured. Try it on a staging copy before relying on it.
+
+A report with no findings does not mean there is no malware.
+
+Testers and developers are welcome. See [Contributing](#contributing).
+
 ## What it does
 
 - **Scans files** for malicious patterns and for PHP in places it should not be.
@@ -135,7 +146,10 @@ Forks and improvements are welcome. The most useful things right now are:
 
 A few things to know before you change anything:
 
-- The automated test suite is not in this repository.
+- Offline regression checks are in `tests`. Run `python -B -m unittest discover -s tests -v`.
+  They use disposable fixtures and simulated services. PHP CLI is needed for PHP checks;
+  GUI checks require Tk. See [the 17 November review](documentation/AUDIT-2026-11-17.txt)
+  for coverage, fixes and the remaining hosting checks.
 - After changing any packaged file, run this, or `verify-package.py` will report a
   mismatch:
 

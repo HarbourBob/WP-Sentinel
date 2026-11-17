@@ -57,7 +57,7 @@ def inspected(inventory, path):
     gaps = inventory.get('uninspected_directories')
     if not isinstance(gaps, list) or inventory.get('file_limit_reached') is not False or inventory.get('traversal_scope_known') is not True:
         return inventory['traversal_complete']
-    return not any(path == gap or path.startswith(gap + '/') for gap in gaps)
+    return not any(gap in ('', '.') or path == gap or path.startswith(gap + '/') for gap in gaps)
 
 def compare(before, after, root):
     validate(before, root); validate(after, root)
